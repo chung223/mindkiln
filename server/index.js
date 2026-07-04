@@ -14,11 +14,11 @@ import {
 } from './store.js';
 import { handleCouncilMessage } from './council.js';
 import { startDistillation, regenerateDimension, getJob, getActiveJobForCharacter, subscribe, cancelJobsForCharacter } from './distill.js';
-import { handleMessage } from './chat.js';
+import { handleMessage, handleSessionReview } from './chat.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
 import { normalizeAliases, SUBJECT_TYPES, OUTPUT_LANGUAGES } from './store.js';
 import { detectSpeakersForCharacter, estimateDistillation } from './extract.js';
-import { DIMENSIONS } from './prompts.js';
+import { DIMENSIONS, TRAINING_SCENARIOS } from './prompts.js';
 import { ZH_VARIANTS, DEFAULT_VARIANT } from './zhtw.js';
 import { createBackup } from './backup.js';
 
@@ -309,6 +309,17 @@ app.delete('/api/characters/:id/chats/:chatId', wrap((req, res) => {
 }));
 
 app.post('/api/characters/:id/chats/:chatId/messages', wrap(handleMessage));
+
+// 關係練習:情境清單 + 整場檢討
+app.get('/api/training-scenarios', (req, res) => {
+  res.json(
+    Object.entries(TRAINING_SCENARIOS).map(([key, s]) => ({
+      key, label: s.label, difficulty: s.difficulty, goal: s.goal,
+    }))
+  );
+});
+
+app.post('/api/characters/:id/chats/:chatId/review', wrap(handleSessionReview));
 
 // ---------- 議事會 Advisory Board ----------
 

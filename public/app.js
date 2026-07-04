@@ -18,7 +18,7 @@ const STATUS_LABEL = { new: '待煉', distilling: '煉製中', ready: '已成', 
 
 const MODE_LABELS = {
   chat: '對話', predict: '預測', rehearse: '排練', letter: '未寄出的信',
-  perspective: '對方視角', reflect: '反思陪伴',
+  perspective: '對方視角', reflect: '反思陪伴', training: '關係練習',
 };
 // 感情處理模式(顯示不同色彩 + 開場提示)
 const EMOTIONAL_MODES = new Set(['rehearse', 'letter', 'perspective', 'reflect']);
@@ -29,7 +29,16 @@ const MODE_HINTS = {
   letter: (n) => `寫下想說卻沒說出口的話,收到一封「${n}」語氣的回信。幫你放下的練習。`,
   perspective: (n) => `描述你們之間發生的事,讓「${n}」說出當時對方那一邊可能的心境。幫你看見全貌。`,
   reflect: (n) => `「${n}」陪你聊,同時是一面鏡子——溫柔地照見你自己的模式。`,
+  training: (n) => `跟「${n}」練習一場真實的對話,一位溝通教練在旁邊給你回饋。選一個情境開始。`,
 };
+// mode → 對話卡片/標頭的色彩類別
+function modeChipClass(mode) {
+  if (mode === 'predict') return ' predict';
+  if (mode === 'training') return ' training';
+  if (EMOTIONAL_MODES.has(mode)) return ' emotional';
+  return '';
+}
+const STAR = (n) => '⭐'.repeat(Math.max(1, Math.min(5, n || 1)));
 const PHASES = [
   { key: 'corpus', label: '練泥 · 載入語料' },
   { key: 'research', label: '入爐 · 維度分析' },
@@ -433,7 +442,7 @@ function renderChats(chats) {
   for (const ch of chats) {
     const li = document.createElement('li');
     li.innerHTML = `
-      <span class="mode-chip ${ch.mode === 'predict' ? 'predict' : EMOTIONAL_MODES.has(ch.mode) ? 'emotional' : ''}">${MODE_LABELS[ch.mode] || '對話'}</span>
+      <span class="mode-chip${modeChipClass(ch.mode)}">${MODE_LABELS[ch.mode] || '對話'}</span>
       <span class="cl-title">${esc(ch.title)}</span>
       <span class="cl-meta">${ch.messageCount} 則</span>
       <button class="cl-del" title="刪除">✕</button>`;
@@ -595,14 +604,112 @@ async function openChat(chatId) {
   $('#chat-char-name').textContent = state.current.name;
   const chip = $('#chat-mode-chip');
   chip.textContent = (MODE_LABELS[chat.mode] || '對話') + '模式';
-  chip.className = 'mode-chip' + (chat.mode === 'predict' ? ' predict' : EMOTIONAL_MODES.has(chat.mode) ? ' emotional' : '');
+  chip.className = 'mode-chip' + modeChipClass(chat.mode);
   renderConditionsBanner(chat.conditions);
+  // 訓練模式:顯示「結束並檢討」按鈕
+  $('#btn-review').hidden = chat.mode !== 'training';
   const box = $('#messages');
   box.innerHTML = '';
-  for (const m of chat.messages) appendMessage(m.role, m.content);
+  for (const m of chat.messages) {
+    const div = appendMessage(m.role, m.content);
+    if (m.role === 'assistant' && m.coach) appendCoach(div, m.coach);
+  }
   showView('view-chat');
   $('#composer-input').focus();
   box.scrollTop = box.scrollHeight;
+}
+
+// 結束訓練:顯示/串流一份檢討報告到彈窗
+async function runReview(force = false) {
+  if (!state.chat || state.chat.mode !== 'training' || state.reviewing) return;
+  const chat = state.chat;                 // 綁定本次檢討的對話
+  const bodyEl = $('#review-body');
+  const regenBtn = $('#btn-review-regen');
+  // 已有上次檢討且非強制重跑:直接顯示,不再花一次呼叫
+  if (!force && chat.review?.content) {
+    bodyEl.innerHTML = renderMd(chat.review.content);
+    regenBtn.hidden = false;
+    $('#modal-review').showModal();
+    return;
+  }
+  bodyEl.innerHTML = '<span class="muted">教練正在回顧整場對話⋯</span>';
+  regenBtn.hidden = true;
+  $('#modal-review').showModal();
+  const ctrl = new AbortController();
+  state.reviewCtrl = ctrl;
+  state.reviewing = true;
+  $('#btn-review').disabled = true;
+  let acc = '';
+  const alive = () => chat === state.chat && state.reviewCtrl === ctrl; // 仍是同一對話、同一次檢討
+  try {
+    const res = await fetch(
+      `/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(chat.id)}/review`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: ctrl.signal }
+    );
+    const ctype = res.headers.get('content-type') || '';
+    if (!res.ok || !ctype.includes('text/event-stream')) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `請求失敗（${res.status}）`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const raw = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let event = 'message', data = '';
+        for (const l of raw.split('\n')) {
+          if (l.startsWith('event: ')) event = l.slice(7).trim();
+          else if (l.startsWith('data: ')) data += l.slice(6);
+        }
+        if (!data) continue;
+        let payload;
+        try { payload = JSON.parse(data); } catch { continue; }
+        if (event === 'delta') {
+          acc += payload.text;
+          if (alive()) bodyEl.innerHTML = renderMd(acc);
+        } else if (event === 'error') {
+          if (alive()) bodyEl.innerHTML = `<span style="color:var(--cinnabar-bright)">${esc(payload.message)}</span>`;
+        }
+      }
+    }
+    if (acc.trim()) {
+      chat.review = { content: acc };       // 記在記憶體,重開此對話可直接看
+      if (alive()) regenBtn.hidden = false;
+    } else if (alive()) {
+      bodyEl.innerHTML = '<span class="muted">沒有收到檢討內容,請重試。</span>';
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError' && alive()) bodyEl.innerHTML = `<span style="color:var(--cinnabar-bright)">${esc(err.message)}</span>`;
+  } finally {
+    if (state.reviewCtrl === ctrl) state.reviewCtrl = null;
+    state.reviewing = false;
+    $('#btn-review').disabled = false;
+  }
+}
+
+// 關閉檢討彈窗:中止仍在跑的串流,避免背景繼續寫入
+function closeReview() {
+  state.reviewCtrl?.abort();
+  state.reviewCtrl = null;
+  $('#modal-review').close();
+}
+
+// 在某則助理訊息下方掛上一條教練點評
+function appendCoach(afterDiv, text) {
+  const box = $('#messages');
+  const div = document.createElement('div');
+  div.className = 'coach-note';
+  div.innerHTML = `<span class="coach-badge">💬 教練</span><span class="coach-text">${esc(text)}</span>`;
+  if (afterDiv && afterDiv.nextSibling) box.insertBefore(div, afterDiv.nextSibling);
+  else box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
 }
 
 function renderConditionsBanner(cond) {
@@ -681,6 +788,7 @@ async function sendMessage() {
     let buf = '';
     let failed = null;
     let finished = false;
+    let coachText = null;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -704,6 +812,9 @@ async function sendMessage() {
             body.innerHTML = renderMd(acc);
             if (stick) box.scrollTop = box.scrollHeight;
           }
+        } else if (event === 'coach') {
+          coachText = payload.text;
+          if (chat === state.chat) appendCoach(holder, coachText);
         } else if (event === 'error') {
           failed = payload.message || '發生錯誤';
         } else if (event === 'done') {
@@ -726,7 +837,7 @@ async function sendMessage() {
       if (chat === state.chat) appendError('沒有收到回應');
     } else {
       chat.messages.push({ role: 'user', content });
-      chat.messages.push({ role: 'assistant', content: acc });
+      chat.messages.push({ role: 'assistant', content: acc, ...(coachText ? { coach: coachText } : {}) });
     }
   } catch (err) {
     bubble.classList.remove('streaming');
@@ -1022,15 +1133,35 @@ function bind() {
   });
 
   // 開新對話(模式選擇)
+  // 關係練習:情境選單
+  let SCENARIOS = [];
+  const scenarioHint = () => {
+    const s = SCENARIOS.find((x) => x.key === $('#new-chat-scenario').value);
+    $('#scenario-hint').textContent = s ? `${STAR(s.difficulty)}　${s.goal}` : '';
+  };
+  const loadScenarios = async () => {
+    if (SCENARIOS.length) return;
+    try {
+      SCENARIOS = await api('/api/training-scenarios');
+      $('#new-chat-scenario').innerHTML = SCENARIOS
+        .map((s) => `<option value="${s.key}">${esc(s.label)}　${STAR(s.difficulty)}</option>`).join('');
+    } catch { /* 靜默:選單留空 */ }
+  };
+  $('#new-chat-scenario').addEventListener('change', scenarioHint);
+
   const modeHint = () => {
     const m = $('#new-chat-mode').value;
     const name = state.current?.name || '此人';
     $('#new-chat-hint').textContent = MODE_HINTS[m]?.(name) || '';
+    const isTraining = m === 'training';
+    $('#training-opts').hidden = !isTraining;
+    if (isTraining) scenarioHint();
   };
   $('#new-chat-mode').addEventListener('change', modeHint);
-  const openNewChat = () => {
+  const openNewChat = async () => {
     if (!state.current.hasPersona) { toast('請先完成蒸餾,才能開始對話', true); return; }
     $('#form-new-chat').reset();
+    await loadScenarios();
     modeHint();
     $('#modal-new-chat').showModal();
   };
@@ -1038,6 +1169,7 @@ function bind() {
   $('#form-new-chat').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
+      const mode = $('#new-chat-mode').value;
       const conditions = {
         scenario: $('#cond-scenario').value.trim(),
         timepoint: $('#cond-timepoint').value.trim(),
@@ -1046,9 +1178,13 @@ function bind() {
         extra: $('#cond-extra').value.trim(),
       };
       for (const k of Object.keys(conditions)) if (!conditions[k]) delete conditions[k];
+      const payload = { title: $('#cond-title').value.trim(), mode, conditions };
+      if (mode === 'training') {
+        payload.scenario = $('#new-chat-scenario').value;
+        payload.coachMode = $('#new-chat-coachmode').value;
+      }
       const chat = await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats`, {
-        method: 'POST',
-        body: { title: $('#cond-title').value.trim(), mode: $('#new-chat-mode').value, conditions },
+        method: 'POST', body: payload,
       });
       $('#modal-new-chat').close();
       await openChat(chat.id);
@@ -1066,6 +1202,10 @@ function bind() {
       toast(err.message, true);
     }
   });
+  $('#btn-review').addEventListener('click', () => runReview(false));
+  $('#btn-review-regen').addEventListener('click', () => runReview(true));
+  $('#btn-review-close').addEventListener('click', closeReview);
+  $('#modal-review').addEventListener('close', () => { state.reviewCtrl?.abort(); state.reviewCtrl = null; });
   $('#btn-show-conditions').addEventListener('click', () => {
     const b = $('#conditions-banner');
     b.hidden = !b.hidden;

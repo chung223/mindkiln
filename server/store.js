@@ -230,18 +230,24 @@ export function listChats(id) {
   return out;
 }
 
-const CHAT_MODE_SET = new Set(['chat', 'predict', 'rehearse', 'letter', 'perspective', 'reflect']);
+const CHAT_MODE_SET = new Set(['chat', 'predict', 'rehearse', 'letter', 'perspective', 'reflect', 'training']);
+const SCENARIO_SET = new Set(['casual', 'icebreak', 'clarify', 'invite', 'repair', 'boundary', 'confess', 'ambiguity', 'custom']);
 
-export function createChat(charId, { title, mode, conditions }) {
+export function createChat(charId, { title, mode, conditions, scenario, coachMode }) {
+  const m = CHAT_MODE_SET.has(mode) ? mode : 'chat';
   const chat = {
     id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     title: title || new Date().toLocaleString('zh-TW'),
-    mode: CHAT_MODE_SET.has(mode) ? mode : 'chat',
+    mode: m,
     conditions: conditions || {},
     messages: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+  if (m === 'training') {
+    chat.scenario = SCENARIO_SET.has(scenario) ? scenario : 'custom';
+    chat.coachMode = coachMode === 'report' ? 'report' : 'realtime';
+  }
   fs.mkdirSync(chatsDir(charId), { recursive: true });
   writeChat(charId, chat);
   return chat;

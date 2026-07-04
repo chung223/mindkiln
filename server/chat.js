@@ -1,4 +1,4 @@
-import { chatSystemBlocks } from './prompts.js';
+import { chatSystemBlocks, coachPrompt, getScenario, sessionReviewPrompt } from './prompts.js';
 import { streamChat, describeError } from './llm.js';
 import { getCharacter, getChat, writeChat, readPersona } from './store.js';
 import { toTraditional, shouldForceTraditional, makeStreamConverter } from './zhtw.js';
@@ -41,7 +41,7 @@ export async function handleMessage(req, res) {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
-  const system = chatSystemBlocks(character.name, persona, chat.conditions, chat.mode);
+  const system = chatSystemBlocks(character.name, persona, chat.conditions, chat.mode, chat.scenario);
   const apiMessages = chat.messages.map((m) => ({ role: m.role, content: m.content }));
   // 在最後一則訊息掛快取斷點,讓後續每輪重用整段對話前綴(省 input 費用)
   const lastMsg = apiMessages[apiMessages.length - 1];
@@ -85,10 +85,27 @@ export async function handleMessage(req, res) {
       throw new Error('模型沒有產生任何回覆內容(可能因輸出達到長度上限),這輪訊息未保存,請重試或換個問法。');
     }
     const content = result.truncated ? reply + '\n\n…（輸出達到長度上限而截斷）' : reply;
+    const assistantMsg = { role: 'assistant', content, at: new Date().toISOString() };
+
+    // 訓練模式即時教練:人物回覆後,針對使用者剛剛的表達給一句點評(best-effort,失敗不影響主回覆)
+    if (!aborted && chat.mode === 'training' && chat.coachMode === 'realtime') {
+      const recent = chat.messages
+        .slice(-7)
+        .map((m) => `${m.role === 'user' ? '使用者' : character.name}：${m.content}`)
+        .join('\n');
+      const transcript = `${recent}\n${character.name}：${content}`;
+      const coach = await runCoach({ character, scenario: chat.scenario, transcript, signal: ctrl.signal, forceTrad });
+      if (coach && !aborted) {
+        assistantMsg.coach = coach;
+        send('coach', { text: coach });
+      }
+    }
+    // 教練呼叫可能耗時數秒,期間客戶端可能離開:與 line 80 同樣的契約,離開就不寫檔、不送 done
+    // (否則前端已回滾這輪,磁碟卻留著,重開對話會憑空多出一則)
+    if (aborted) return;
 
     // 重新讀取磁碟上的最新對話再追加,避免與同一對話的並發請求互相覆蓋
     // (getChat/writeChat 皆同步,單一 Node 程序內此段不會被打斷)
-    const assistantMsg = { role: 'assistant', content, at: new Date().toISOString() };
     let latest;
     try {
       latest = getChat(charId, chatId);
@@ -108,4 +125,90 @@ export async function handleMessage(req, res) {
     if (!aborted) send('error', { message: describeError(err) });
   }
   if (!aborted) res.end();
+}
+
+/**
+ * 訓練檢討:對整段練習對話產出一份帶分數的檢討報告(SSE 串流)。
+ */
+export async function handleSessionReview(req, res) {
+  const { id: charId, chatId } = req.params;
+  let character, chat;
+  try {
+    character = getCharacter(charId);
+    chat = getChat(charId, chatId);
+  } catch {
+    res.status(404).json({ error: '找不到人物或對話' });
+    return;
+  }
+  const convo = (chat.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (convo.length < 2) {
+    res.status(400).json({ error: '對話還太短,多練幾句再結束吧。' });
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  const sc = getScenario(chat.scenario);
+  const transcript = convo
+    .map((m) => `${m.role === 'user' ? '使用者' : character.name}：${m.content}`)
+    .join('\n');
+  const system = [{ type: 'text', text: sessionReviewPrompt(character.name, sc) }];
+
+  const ctrl = new AbortController();
+  let aborted = false;
+  res.on('close', () => { if (!res.writableEnded) { aborted = true; ctrl.abort(); } });
+
+  const forceTrad = shouldForceTraditional(character);
+  const streamConv = forceTrad
+    ? makeStreamConverter((chunk) => { if (!aborted && chunk) send('delta', { text: chunk }); })
+    : null;
+
+  try {
+    const result = await streamChat({
+      system,
+      messages: [{ role: 'user', content: `這是一場「${sc.label}」練習的完整對話,請只針對「使用者」的表現產出檢討報告:\n\n${transcript}` }],
+      maxTokens: 8000,
+      signal: ctrl.signal,
+      onDelta: (d) => { if (aborted) return; if (streamConv) streamConv.push(d); else send('delta', { text: d }); },
+    });
+    if (streamConv) streamConv.flush();
+    if (aborted) return;
+    const report = forceTrad ? toTraditional(result.text) : result.text;
+    // 落盤,重開對話仍能看到上次的檢討
+    try {
+      const latest = getChat(charId, chatId);
+      latest.review = { at: new Date().toISOString(), content: report };
+      writeChat(charId, latest);
+    } catch { /* 對話已刪除,略過 */ }
+    send('done', {});
+  } catch (err) {
+    if (!aborted) send('error', { message: describeError(err) });
+  }
+  if (!aborted) res.end();
+}
+
+// 即時教練:對「使用者」剛剛的一則發言給一句點評。失敗回空字串,不影響主回覆。
+async function runCoach({ character, scenario, transcript, signal, forceTrad }) {
+  const sc = getScenario(scenario);
+  try {
+    const r = await streamChat({
+      system: [{ type: 'text', text: coachPrompt(character.name, sc) }],
+      messages: [{
+        role: 'user',
+        content: `這一場練習情境:「${sc.label}」。以下是最近的對話,「使用者」是你要點評的對象:\n\n${transcript}\n\n請針對「使用者」最後一則發言,給一句即時教練點評。`,
+      }],
+      maxTokens: 500,
+      signal,
+    });
+    const text = forceTrad ? toTraditional(r.text) : r.text;
+    return text.trim();
+  } catch {
+    return '';
+  }
 }

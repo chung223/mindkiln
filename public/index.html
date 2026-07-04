@@ -185,6 +185,7 @@
         <h2 id="chat-char-name"></h2>
         <span class="mode-chip" id="chat-mode-chip"></span>
       </div>
+      <button class="btn btn-ghost btn-small" id="btn-review" hidden>結束並檢討</button>
       <button class="btn btn-ghost btn-small" id="btn-show-conditions">情境條件</button>
     </header>
     <div class="conditions-banner" id="conditions-banner" hidden></div>
@@ -334,9 +335,24 @@
           <option value="perspective">從對方的角度看</option>
           <option value="reflect">反思陪伴(照見自己)</option>
         </optgroup>
+        <optgroup label="關係練習(教練)">
+          <option value="training">關係練習 · 有教練在旁</option>
+        </optgroup>
       </select>
     </label>
     <p class="hint" id="new-chat-hint"></p>
+    <div id="training-opts" hidden>
+      <label>練習情境
+        <select id="new-chat-scenario" class="select"></select>
+      </label>
+      <p class="hint" id="scenario-hint"></p>
+      <label>教練回饋方式
+        <select id="new-chat-coachmode" class="select">
+          <option value="realtime">即時點評——每輪之後給一句</option>
+          <option value="report">安靜陪練——結束才給一份報告</option>
+        </select>
+      </label>
+    </div>
     <label>對話標題(選填)<input type="text" id="cond-title" placeholder="留空自動以時間命名"></label>
     <details class="cond-details" id="cond-details">
       <summary>情境條件(選填)—設定後整段對話都會遵守</summary>
@@ -351,6 +367,18 @@
       <button type="submit" class="btn btn-primary">開始</button>
     </div>
   </form>
+</dialog>
+
+<!-- 訓練檢討報告 -->
+<dialog id="modal-review">
+  <div class="modal-form review-modal">
+    <h3>練習檢討</h3>
+    <div class="md-body review-body" id="review-body"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="btn-review-regen" hidden>重新檢討</button>
+      <button type="button" class="btn btn-primary" id="btn-review-close">關閉</button>
+    </div>
+  </div>
 </dialog>
 
 <!-- 建立議事會 -->
