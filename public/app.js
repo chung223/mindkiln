@@ -606,8 +606,9 @@ async function openChat(chatId) {
   chip.textContent = (MODE_LABELS[chat.mode] || '對話') + '模式';
   chip.className = 'mode-chip' + modeChipClass(chat.mode);
   renderConditionsBanner(chat.conditions);
-  // 訓練模式:顯示「結束並檢討」按鈕
+  // 訓練模式:顯示「結束並檢討」;預測模式:顯示「存為預測」
   $('#btn-review').hidden = chat.mode !== 'training';
+  $('#btn-save-prediction').hidden = chat.mode !== 'predict';
   const box = $('#messages');
   box.innerHTML = '';
   for (const m of chat.messages) {
@@ -617,6 +618,65 @@ async function openChat(chatId) {
   showView('view-chat');
   $('#composer-input').focus();
   box.scrollTop = box.scrollHeight;
+}
+
+// 預測記錄:準度統計文字
+function predTallyText(list) {
+  if (!list.length) return '還沒有預測記錄。在「預測」模式對話後,按上方「存為預測」把結論記下來,事後回填實際結果。';
+  const t = { hit: 0, miss: 0, partial: 0, '': 0 };
+  for (const r of list) t[r.verdict] = (t[r.verdict] || 0) + 1;
+  const judged = t.hit + t.miss + t.partial;
+  const rate = judged ? Math.round(((t.hit + t.partial * 0.5) / judged) * 100) : null;
+  return `共 ${list.length} 則｜命中 ${t.hit}・部分 ${t.partial}・落空 ${t.miss}・待驗證 ${t['']}${rate != null ? `｜準度約 ${rate}%` : ''}`;
+}
+
+function renderPredictions(id, list) {
+  $('#predictions-tally').textContent = predTallyText(list);
+  const box = $('#predictions-list');
+  box.innerHTML = '';
+  const patch = async (pid, body) => {
+    try { await api(`/api/characters/${encodeURIComponent(id)}/predictions/${encodeURIComponent(pid)}`, { method: 'PATCH', body }); }
+    catch (err) { toast(err.message, true); }
+  };
+  for (const r of list) {
+    const div = document.createElement('div');
+    div.className = 'prediction-item verdict-' + (r.verdict || 'none');
+    div.innerHTML = `
+      <div class="pred-head">
+        <span class="pred-date">${esc(new Date(r.at).toLocaleString('zh-TW'))}</span>
+        <select class="pred-verdict">
+          <option value="">待驗證</option>
+          <option value="hit">命中</option>
+          <option value="partial">部分</option>
+          <option value="miss">落空</option>
+        </select>
+        <button class="btn btn-ghost btn-small pred-del">刪除</button>
+      </div>
+      ${r.situation ? `<div class="pred-situation">情境:${esc(r.situation)}</div>` : ''}
+      <div class="pred-body md-body">${renderMd(r.prediction)}</div>
+      <textarea class="pred-outcome" placeholder="實際發生了什麼?(回填後即計入準度)"></textarea>`;
+    const sel = div.querySelector('.pred-verdict');
+    sel.value = r.verdict || '';
+    div.querySelector('.pred-outcome').value = r.outcome || '';
+    sel.addEventListener('change', () => {
+      r.verdict = sel.value;
+      div.className = 'prediction-item verdict-' + (r.verdict || 'none');
+      $('#predictions-tally').textContent = predTallyText(list);
+      patch(r.id, { verdict: r.verdict });
+    });
+    div.querySelector('.pred-outcome').addEventListener('change', (e) => {
+      r.outcome = e.target.value;
+      patch(r.id, { outcome: r.outcome });
+    });
+    div.querySelector('.pred-del').addEventListener('click', async () => {
+      if (!confirm('刪除這則預測?')) return;
+      try {
+        await api(`/api/characters/${encodeURIComponent(id)}/predictions/${encodeURIComponent(r.id)}`, { method: 'DELETE' });
+        renderPredictions(id, list.filter((x) => x.id !== r.id));
+      } catch (err) { toast(err.message, true); }
+    });
+    box.appendChild(div);
+  }
 }
 
 // 結束訓練:顯示/串流一份檢討報告到彈窗
@@ -725,13 +785,73 @@ function renderConditionsBanner(cond) {
   $('#btn-show-conditions').style.display = parts.length ? '' : 'none';
 }
 
+// ---------- 語音(Web Speech API,純前端、零成本、離線)----------
+const TTS_OK = typeof window !== 'undefined' && 'speechSynthesis' in window;
+const SR_CLASS = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+function speak(text) {
+  if (!TTS_OK || !text || !text.trim()) return;
+  window.speechSynthesis.cancel(); // 先停掉上一段
+  const u = new SpeechSynthesisUtterance(text.slice(0, 4000));
+  u.lang = 'zh-TW';
+  const voices = window.speechSynthesis.getVoices();
+  const zh = voices.find((v) => /zh[-_]?TW|Taiwan/i.test(v.lang) || /國語|中文|Taiwan/i.test(v.name))
+    || voices.find((v) => /^zh/i.test(v.lang));
+  if (zh) u.voice = zh;
+  window.speechSynthesis.speak(u);
+}
+
+function setupVoice() {
+  // TTS:朗讀鈕用事件委派(訊息會動態新增)
+  if (TTS_OK) {
+    $('#messages').addEventListener('click', (e) => {
+      const b = e.target.closest('.speak-btn');
+      if (!b) return;
+      const body = b.closest('.msg')?.querySelector('.md-body');
+      if (body) speak(body.textContent);
+    });
+    // 有些瀏覽器 voices 非同步載入,先觸發一次
+    window.speechSynthesis.getVoices();
+  }
+  // STT:語音輸入
+  const mic = $('#btn-mic');
+  if (!SR_CLASS) return; // 不支援就維持隱藏
+  mic.hidden = false;
+  const recog = new SR_CLASS();
+  recog.lang = 'zh-TW';
+  recog.interimResults = true;
+  recog.continuous = false;
+  let recognizing = false;
+  let base = '';
+  recog.onresult = (e) => {
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t; else interim += t;
+    }
+    $('#composer-input').value = base + final + interim;
+  };
+  const stop = () => { recognizing = false; mic.classList.remove('recording'); };
+  recog.onend = stop;
+  recog.onerror = stop;
+  mic.addEventListener('click', () => {
+    if (recognizing) { recog.stop(); return; }
+    const cur = $('#composer-input').value;
+    base = cur ? cur + ' ' : '';
+    recognizing = true;
+    mic.classList.add('recording');
+    try { recog.start(); } catch { stop(); }
+  });
+}
+
 function appendMessage(role, content, streaming = false) {
   const box = $('#messages');
   const div = document.createElement('div');
   div.className = `msg msg-${role}`;
   const roleName = role === 'user' ? '你' : state.current.name;
+  const speakBtn = role === 'assistant' && TTS_OK ? ' <button class="speak-btn" title="朗讀">🔊</button>' : '';
   div.innerHTML = `
-    <div class="msg-role">${esc(roleName)}</div>
+    <div class="msg-role">${esc(roleName)}${speakBtn}</div>
     <div class="msg-bubble${streaming ? ' streaming' : ''}">${role === 'assistant' ? `<div class="md-body">${renderMd(content)}</div>` : esc(content).replace(/\n/g, '<br>')}</div>`;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
@@ -859,6 +979,7 @@ async function sendMessage() {
 // ---------- 事件繫結 ----------
 
 function bind() {
+  setupVoice(); // 語音(若瀏覽器支援)
   // 新增人物
   const syncConsentRow = () => {
     $('#consent-row').hidden = $('#new-char-subject').value !== 'private';
@@ -963,6 +1084,26 @@ function bind() {
       toast(err.message, true);
     }
   });
+  $('#btn-persona-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(personaRaw);
+      toast('已複製人物檔案,可直接貼進 Claude / ChatGPT 當系統提示詞');
+    } catch {
+      toast('瀏覽器擋了複製,請切到編輯模式手動選取', true);
+    }
+  });
+  $('#btn-persona-download').addEventListener('click', () => {
+    const name = (state.current?.name || 'persona').replace(/[\\/:*?"<>|]/g, '_');
+    const blob = new Blob([personaRaw], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}-persona.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
   $('#btn-edit-persona').addEventListener('click', async () => {
     try {
       const { persona } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/persona`);
@@ -971,6 +1112,78 @@ function bind() {
       $('#persona-editor').value = persona;
       setPersonaEditMode(false);
       $('#modal-persona').showModal();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  // 跨對話記憶:檢視 / 編輯 / 清空
+  $('#btn-view-memory').addEventListener('click', async () => {
+    try {
+      const { memory } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/memory`);
+      $('#memory-editor').value = memory || '';
+      $('#modal-memory').showModal();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  $('#btn-memory-save').addEventListener('click', async () => {
+    try {
+      await api(`/api/characters/${encodeURIComponent(state.current.id)}/memory`, {
+        method: 'PUT', body: { memory: $('#memory-editor').value },
+      });
+      $('#modal-memory').close();
+      toast('記憶已儲存,下次對話就會帶著它');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  $('#btn-memory-clear').addEventListener('click', async () => {
+    if (!confirm('清空此人物的跨對話記憶?此動作無法復原。')) return;
+    try {
+      await api(`/api/characters/${encodeURIComponent(state.current.id)}/memory`, { method: 'PUT', body: { memory: '' } });
+      $('#memory-editor').value = '';
+      toast('已清空記憶');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  // persona 版本歷史
+  $('#btn-persona-versions').addEventListener('click', async () => {
+    const id = state.current.id;
+    const ul = $('#versions-list');
+    const prev = $('#versions-preview');
+    prev.innerHTML = '<span class="muted">點左側的時間可預覽該版本</span>';
+    try {
+      const versions = await api(`/api/characters/${encodeURIComponent(id)}/persona-versions`);
+      if (!versions.length) {
+        ul.innerHTML = '<li class="muted">還沒有歷史版本——之後每次編輯 / 重蒸餾前會自動存一份。</li>';
+      } else {
+        ul.innerHTML = '';
+        for (const v of versions) {
+          const li = document.createElement('li');
+          li.innerHTML = `<button class="ver-time">${esc(new Date(v.at).toLocaleString('zh-TW'))}</button>
+            <span class="ver-size">${(v.bytes / 1024).toFixed(1)}KB</span>
+            <button class="btn btn-ghost btn-small ver-restore">回溯</button>`;
+          li.querySelector('.ver-time').addEventListener('click', async () => {
+            try {
+              const { content } = await api(`/api/characters/${encodeURIComponent(id)}/persona-versions/${encodeURIComponent(v.name)}`);
+              prev.innerHTML = renderMd(content);
+            } catch (err) { prev.innerHTML = `<span style="color:var(--cinnabar-bright)">${esc(err.message)}</span>`; }
+          });
+          li.querySelector('.ver-restore').addEventListener('click', async () => {
+            if (!confirm(`回溯到「${new Date(v.at).toLocaleString('zh-TW')}」這一版?目前這份會先存成新的歷史版本,可再還原回來。`)) return;
+            try {
+              await api(`/api/characters/${encodeURIComponent(id)}/persona-versions/${encodeURIComponent(v.name)}/restore`, { method: 'POST', body: {} });
+              $('#modal-versions').close();
+              toast('已回溯,persona 已更新');
+            } catch (err) { toast(err.message, true); }
+          });
+          ul.appendChild(li);
+        }
+      }
+      $('#modal-versions').showModal();
     } catch (err) {
       toast(err.message, true);
     }
@@ -1233,6 +1446,43 @@ function bind() {
     } catch (err) {
       toast(err.message, true);
     }
+  });
+  $('#btn-remember').addEventListener('click', async () => {
+    if (!state.chat || state.remembering) return;
+    const btn = $('#btn-remember');
+    state.remembering = true;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = '記憶中⋯';
+    try {
+      await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(state.chat.id)}/remember`, { method: 'POST', body: {} });
+      toast('已更新跨對話記憶——開新對話時他會記得這次');
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      state.remembering = false;
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+  $('#btn-save-prediction').addEventListener('click', async () => {
+    const msgs = state.chat?.messages || [];
+    const lastAsst = [...msgs].reverse().find((m) => m.role === 'assistant');
+    const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
+    if (!lastAsst) { toast('這個對話還沒有預測可以存', true); return; }
+    try {
+      await api(`/api/characters/${encodeURIComponent(state.current.id)}/predictions`, {
+        method: 'POST', body: { situation: lastUser?.content || '', prediction: lastAsst.content },
+      });
+      toast('已存為預測——事後到人物頁「預測記錄」回填實際結果');
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#btn-predictions').addEventListener('click', async () => {
+    try {
+      const list = await api(`/api/characters/${encodeURIComponent(state.current.id)}/predictions`);
+      renderPredictions(state.current.id, list);
+      $('#modal-predictions').showModal();
+    } catch (err) { toast(err.message, true); }
   });
   $('#btn-review').addEventListener('click', () => runReview(false));
   $('#btn-review-regen').addEventListener('click', () => runReview(true));

@@ -1,6 +1,6 @@
-import { chatSystemBlocks, coachPrompt, getScenario, sessionReviewPrompt } from './prompts.js';
+import { chatSystemBlocks, coachPrompt, getScenario, sessionReviewPrompt, memoryUpdatePrompt } from './prompts.js';
 import { streamChat, describeError } from './llm.js';
-import { getCharacter, getChat, writeChat, readPersona } from './store.js';
+import { getCharacter, getChat, writeChat, readPersona, readMemory, writeMemory } from './store.js';
 import { toTraditional, shouldForceTraditional, makeStreamConverter } from './zhtw.js';
 
 /**
@@ -41,7 +41,8 @@ export async function handleMessage(req, res) {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
-  const system = chatSystemBlocks(character.name, persona, chat.conditions, chat.mode, chat.scenario);
+  const memory = readMemory(charId); // 跨對話累積記憶(空字串則不注入)
+  const system = chatSystemBlocks(character.name, persona, chat.conditions, chat.mode, chat.scenario, memory);
   const apiMessages = chat.messages.map((m) => ({ role: m.role, content: m.content }));
   // 在最後一則訊息掛快取斷點,讓後續每輪重用整段對話前綴(省 input 費用)
   const lastMsg = apiMessages[apiMessages.length - 1];
@@ -191,6 +192,51 @@ export async function handleSessionReview(req, res) {
     if (!aborted) send('error', { message: describeError(err) });
   }
   if (!aborted) res.end();
+}
+
+/**
+ * 更新跨對話記憶:把這段對話裡值得長期記住的事,合併進此人物的 memory.md。
+ */
+export async function handleMemoryUpdate(req, res) {
+  const { id: charId, chatId } = req.params;
+  let character, chat;
+  try {
+    character = getCharacter(charId);
+    chat = getChat(charId, chatId);
+  } catch {
+    res.status(404).json({ error: '找不到人物或對話' });
+    return;
+  }
+  const convo = (chat.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (convo.length < 2) {
+    res.status(400).json({ error: '對話還太短,還沒什麼好記的' });
+    return;
+  }
+  const existing = readMemory(charId);
+  const transcript = convo
+    .map((m) => `${m.role === 'user' ? '使用者' : character.name}：${m.content}`)
+    .join('\n');
+  // 客戶端中途離開就中止,別把整個 LLM 呼叫跑完(與 handleMessage / handleSessionReview 同契約)
+  const ctrl = new AbortController();
+  let aborted = false;
+  res.on('close', () => { if (!res.writableEnded) { aborted = true; ctrl.abort(); } });
+  try {
+    const r = await streamChat({
+      system: [{ type: 'text', text: memoryUpdatePrompt(character.name) }],
+      messages: [{
+        role: 'user',
+        content: `【目前的既有記憶】\n${existing || '(目前沒有記憶)'}\n\n【新的對話】\n${transcript}\n\n請輸出更新後的完整記憶。`,
+      }],
+      maxTokens: 2000,
+      signal: ctrl.signal,
+    });
+    if (aborted) return;
+    const updated = (shouldForceTraditional(character) ? toTraditional(r.text) : r.text).trim();
+    writeMemory(charId, updated);
+    res.json({ ok: true, memory: updated });
+  } catch (err) {
+    if (!aborted) res.status(500).json({ error: describeError(err) });
+  }
 }
 
 // 即時教練:對「使用者」剛剛的一則發言給一句點評。失敗回空字串,不影響主回覆。

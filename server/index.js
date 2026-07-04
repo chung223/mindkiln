@@ -9,12 +9,15 @@ import {
   createCharacter, getCharacter, updateCharacter, listCharacters, deleteCharacter,
   listSourceFiles, deleteSourceFile, sourcesDir,
   readPersona, writePersona, listResearch, readResearch,
+  listPersonaVersions, readPersonaVersion,
+  readMemory, writeMemory,
+  readPredictions, writePredictions,
   listChats, createChat, getChat, deleteChat,
   listCouncils, createCouncil, getCouncil, deleteCouncil,
 } from './store.js';
 import { handleCouncilMessage } from './council.js';
 import { startDistillation, regenerateDimension, getJob, getActiveJobForCharacter, subscribe, cancelJobsForCharacter } from './distill.js';
-import { handleMessage, handleSessionReview } from './chat.js';
+import { handleMessage, handleSessionReview, handleMemoryUpdate } from './chat.js';
 import { handleImport } from './import.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
 import { normalizeAliases, SUBJECT_TYPES, OUTPUT_LANGUAGES } from './store.js';
@@ -281,6 +284,93 @@ app.put('/api/characters/:id/persona', wrap((req, res) => {
     return;
   }
   writePersona(req.params.id, persona);
+  res.json({ ok: true });
+}));
+
+// persona 版本歷史:每次覆寫前自動快照,可檢視 / 回溯
+app.get('/api/characters/:id/persona-versions', wrap((req, res) => {
+  getCharacter(req.params.id);
+  res.json(listPersonaVersions(req.params.id));
+}));
+
+app.get('/api/characters/:id/persona-versions/:name', wrap((req, res) => {
+  const content = readPersonaVersion(req.params.id, req.params.name);
+  if (content == null) {
+    res.status(404).json({ error: '找不到此版本' });
+    return;
+  }
+  res.json({ content });
+}));
+
+app.post('/api/characters/:id/persona-versions/:name/restore', wrap((req, res) => {
+  const content = readPersonaVersion(req.params.id, req.params.name);
+  if (content == null) {
+    res.status(404).json({ error: '找不到此版本' });
+    return;
+  }
+  writePersona(req.params.id, content); // 回溯本身也會先快照現況,可再還原
+  res.json({ ok: true });
+}));
+
+// 跨對話記憶:檢視 / 手動編輯或清空 / 從某段對話更新
+app.get('/api/characters/:id/memory', wrap((req, res) => {
+  getCharacter(req.params.id); // 驗證存在
+  res.json({ memory: readMemory(req.params.id) });
+}));
+
+app.put('/api/characters/:id/memory', wrap((req, res) => {
+  getCharacter(req.params.id);
+  writeMemory(req.params.id, (req.body && req.body.memory) || ''); // 允許清空
+  res.json({ ok: true });
+}));
+
+app.post('/api/characters/:id/chats/:chatId/remember', wrap(handleMemoryUpdate));
+
+// 可驗證預測:存下預測 → 事後回填實際結果 → 累積此人物的準度
+app.get('/api/characters/:id/predictions', wrap((req, res) => {
+  getCharacter(req.params.id);
+  res.json(readPredictions(req.params.id));
+}));
+
+app.post('/api/characters/:id/predictions', wrap((req, res) => {
+  getCharacter(req.params.id);
+  const { situation, prediction } = req.body || {};
+  if (!prediction || !prediction.trim()) {
+    res.status(400).json({ error: '預測內容不可為空' });
+    return;
+  }
+  const arr = readPredictions(req.params.id);
+  const rec = {
+    id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    at: new Date().toISOString(),
+    situation: (situation || '').trim(),
+    prediction: prediction.trim(),
+    outcome: '',
+    verdict: '', // '' | hit | miss | partial
+  };
+  arr.unshift(rec);
+  writePredictions(req.params.id, arr);
+  res.json(rec);
+}));
+
+app.patch('/api/characters/:id/predictions/:pid', wrap((req, res) => {
+  getCharacter(req.params.id);
+  const arr = readPredictions(req.params.id);
+  const rec = arr.find((r) => r.id === req.params.pid);
+  if (!rec) {
+    res.status(404).json({ error: '找不到此預測' });
+    return;
+  }
+  const { outcome, verdict } = req.body || {};
+  if (outcome !== undefined) rec.outcome = String(outcome);
+  if (verdict !== undefined && ['', 'hit', 'miss', 'partial'].includes(verdict)) rec.verdict = verdict;
+  writePredictions(req.params.id, arr);
+  res.json(rec);
+}));
+
+app.delete('/api/characters/:id/predictions/:pid', wrap((req, res) => {
+  getCharacter(req.params.id);
+  writePredictions(req.params.id, readPredictions(req.params.id).filter((r) => r.id !== req.params.pid));
   res.json({ ok: true });
 }));
 

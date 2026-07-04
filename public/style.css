@@ -460,6 +460,45 @@ body {
 .mode-chip.emotional { border-color: var(--jade); color: var(--jade); }
 .mode-chip.training { border-color: var(--gold); color: var(--gold); }
 
+/* 語音:朗讀鈕 + 麥克風 */
+.speak-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.4;
+  padding: 0 2px;
+  transition: opacity 0.15s;
+}
+.speak-btn:hover { opacity: 0.95; }
+.mic-btn { font-size: 18px; padding: 0 12px; align-self: stretch; }
+.mic-btn.recording {
+  color: var(--cinnabar-bright);
+  animation: pulse 1s infinite;
+}
+
+/* persona 版本歷史 */
+.versions-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; min-height: 320px; max-height: 60vh; }
+.versions-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; border-right: 1px solid var(--line, rgba(255,255,255,0.08)); }
+.versions-list li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid var(--line, rgba(255,255,255,0.06)); font-size: 13px; }
+.versions-list .ver-time { background: none; border: none; color: var(--gold); cursor: pointer; padding: 0; text-align: left; flex: 1; font-size: 13px; }
+.versions-list .ver-time:hover { text-decoration: underline; }
+.versions-list .ver-size { opacity: 0.5; font-size: 11px; }
+.versions-preview { overflow-y: auto; padding: 4px 8px; line-height: 1.7; }
+
+/* 預測記錄 */
+.predictions-list { max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.prediction-item { border: 1px solid var(--line, rgba(255,255,255,0.08)); border-left: 3px solid var(--line, rgba(255,255,255,0.15)); border-radius: 8px; padding: 10px 12px; }
+.prediction-item.verdict-hit { border-left-color: var(--jade); }
+.prediction-item.verdict-miss { border-left-color: var(--cinnabar-bright); }
+.prediction-item.verdict-partial { border-left-color: var(--gold); }
+.pred-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.pred-date { font-size: 12px; opacity: 0.6; flex: 1; }
+.pred-verdict { background: var(--ink-2, #1a1a1a); color: inherit; border: 1px solid var(--line, rgba(255,255,255,0.15)); border-radius: 6px; padding: 3px 6px; font-size: 12px; }
+.pred-situation { font-size: 13px; opacity: 0.75; margin-bottom: 4px; }
+.pred-body { font-size: 14px; line-height: 1.65; }
+.pred-outcome { width: 100%; margin-top: 8px; min-height: 44px; background: var(--ink-2, #1a1a1a); color: inherit; border: 1px solid var(--line, rgba(255,255,255,0.12)); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px; resize: vertical; }
+
 /* 關係練習:教練點評(掛在助理訊息下方) */
 .coach-note {
   align-self: flex-start;

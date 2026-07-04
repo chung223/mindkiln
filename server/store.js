@@ -185,8 +185,84 @@ export function readPersona(id) {
   return fs.readFileSync(p, 'utf8');
 }
 
+export function versionsDir(id) {
+  return path.join(characterDir(id), 'versions');
+}
+
+const MAX_PERSONA_VERSIONS = 20;
+
 export function writePersona(id, content) {
-  atomicWrite(personaPath(id), content);
+  const p = personaPath(id);
+  // 覆寫前先把現有版本快照存檔(方便回溯 / diff),快照失敗不阻擋主寫入
+  if (fs.existsSync(p)) {
+    try {
+      const dir = versionsDir(id);
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.copyFileSync(p, path.join(dir, `persona-${stamp}.md`));
+      const files = fs.readdirSync(dir).filter((n) => /^persona-.*\.md$/.test(n)).sort();
+      for (const old of files.slice(0, Math.max(0, files.length - MAX_PERSONA_VERSIONS))) {
+        fs.unlinkSync(path.join(dir, old));
+      }
+    } catch { /* 忽略快照錯誤 */ }
+  }
+  atomicWrite(p, content);
+}
+
+export function listPersonaVersions(id) {
+  const dir = versionsDir(id);
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((n) => /^persona-.*\.md$/.test(n))
+    .sort()
+    .reverse() // 最新在前
+    .map((name) => {
+      const st = fs.statSync(path.join(dir, name));
+      return { name, at: st.mtime.toISOString(), bytes: st.size };
+    });
+}
+
+export function readPersonaVersion(id, name) {
+  const base = path.basename(name);
+  if (!/^persona-.*\.md$/.test(base)) return null; // 防路徑穿越 / 只讀版本檔
+  const p = path.join(versionsDir(id), base);
+  if (!fs.existsSync(p)) return null;
+  return fs.readFileSync(p, 'utf8');
+}
+
+// ---------- 跨對話記憶(此人物累積記得關於使用者/關係的事)----------
+
+export function memoryPath(id) {
+  return path.join(characterDir(id), 'memory.md');
+}
+
+export function readMemory(id) {
+  const p = memoryPath(id);
+  if (!fs.existsSync(p)) return '';
+  return fs.readFileSync(p, 'utf8');
+}
+
+export function writeMemory(id, content) {
+  characterDir(id); // 驗證 id 合法
+  atomicWrite(memoryPath(id), content || '');
+}
+
+// ---------- 可驗證預測(記下預測 → 事後回填實際結果 → 累積準度)----------
+
+export function predictionsPath(id) {
+  return path.join(characterDir(id), 'predictions.json');
+}
+
+export function readPredictions(id) {
+  const p = predictionsPath(id);
+  if (!fs.existsSync(p)) return [];
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return []; }
+}
+
+export function writePredictions(id, arr) {
+  characterDir(id);
+  atomicWrite(predictionsPath(id), JSON.stringify(Array.isArray(arr) ? arr : [], null, 2));
 }
 
 export function writeResearchFile(id, fileName, content) {

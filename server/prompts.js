@@ -284,7 +284,7 @@ export function personaBuildPrompt(characterName, outputLanguage) {
 
 // ---------- 對話 ----------
 
-export function chatSystemBlocks(characterName, persona, conditions, mode, scenario) {
+export function chatSystemBlocks(characterName, persona, conditions, mode, scenario, memory) {
   const roleplayPreamble = `你正在運行一份由「女媧蒸餾管線」產出的人物檔案。完全依照檔案中的「角色扮演規則」與「表達DNA」，以「${characterName}」的身份與使用者對話。
 
 防漂移鐵則：
@@ -301,6 +301,17 @@ export function chatSystemBlocks(characterName, persona, conditions, mode, scena
       cache_control: { type: 'ephemeral' },
     },
   ];
+
+  // 跨對話記憶:此人物在過往對話中累積記得、關於使用者與彼此關係的事(不進快取前綴,因會變動)
+  if (memory && memory.trim()) {
+    blocks.push({
+      type: 'text',
+      text: `【你記得的事(跨對話累積記憶)】
+以下是你(${characterName})在過往對話中記得、關於使用者與你們關係的事。自然地把它當成「你本來就記得」,不要每次都重述或說「根據我的記憶」。若記憶與當下對話衝突,以當下為準。
+
+${memory.trim()}`,
+    });
+  }
 
   const cond = conditionsBlock(conditions);
   if (cond) blocks.push({ type: 'text', text: cond });
@@ -517,6 +528,29 @@ export function sessionReviewPrompt(characterName, s) {
 (3–4 句,誠實、溫暖,不過度鼓勵也不潑冷水。提醒:這是練習與鏡子,不是真人的替代,真正的對話還是要回到真實關係裡。)
 
 鐵律:引用使用者原話時必須是他真的說過的;不評價「${characterName}」的人格;不替使用者判斷關係值不值得、會不會成;不教操縱手段。`;
+}
+
+// 記憶更新:把一段對話裡「值得跨對話記住」的事,合併進既有記憶(整份重寫,去重、精簡)
+export function memoryUpdatePrompt(characterName) {
+  return `你在維護「${characterName}」對使用者的長期記憶——一份會被注入未來每一場對話的筆記,好讓「${characterName}」記得使用者是誰、你們之間發生過什麼。
+
+你會收到:①目前的既有記憶(可能為空);②一段新的對話。請輸出一份「更新後的完整記憶」(整份重寫,不是只寫新增部分)。
+
+該記住的:
+- 關於使用者的穩定事實(身分、處境、在意的人事、重複出現的困擾或目標)。
+- 你們關係裡的重要進展、約定、情緒轉折、講開或未講開的事。
+- 使用者的偏好與地雷(希望被怎麼對待、討厭什麼)。
+
+不要記的:
+- 一次性的閒聊、寒暄、天氣。
+- 過度細節、逐字流水帳。
+- 你(${characterName})自己的設定(那在人物檔案裡,不必重複)。
+
+格式要求:
+- 用精簡的條列,依主題分組(例如「關於使用者」「我們之間」「使用者的偏好」)。
+- 控制在 400 字以內;若既有記憶已涵蓋,就別重複堆疊,做去重與濃縮。
+- 用第一人稱(${characterName}的口吻)或中性筆記皆可,但保持精簡。
+- 只輸出記憶內容本身,不要有前言或說明。`;
 }
 
 export function conditionsBlock(conditions) {

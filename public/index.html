@@ -143,6 +143,7 @@
           <h3><span class="panel-num">肆</span>人物檔案</h3>
           <div class="panel-actions">
             <button class="btn btn-primary btn-small" id="btn-edit-persona">檢視 / 編輯 persona.md</button>
+            <button class="btn btn-ghost btn-small" id="btn-view-memory">跨對話記憶</button>
           </div>
         </div>
         <p class="hint" id="persona-hint"></p>
@@ -154,6 +155,7 @@
           <h3><span class="panel-num">伍</span>對話與預測</h3>
           <div class="panel-actions">
             <button class="btn btn-primary btn-small" id="btn-new-chat">✦ 開新對話</button>
+            <button class="btn btn-ghost btn-small" id="btn-predictions">預測記錄</button>
           </div>
         </div>
         <ul class="chat-list" id="chat-list"></ul>
@@ -186,12 +188,15 @@
         <h2 id="chat-char-name"></h2>
         <span class="mode-chip" id="chat-mode-chip"></span>
       </div>
+      <button class="btn btn-ghost btn-small" id="btn-save-prediction" hidden title="把這則預測記下來,事後回填實際結果">存為預測</button>
+      <button class="btn btn-ghost btn-small" id="btn-remember" title="把這段對話裡值得長期記住的事,存進此人物的跨對話記憶">更新記憶</button>
       <button class="btn btn-ghost btn-small" id="btn-review" hidden>結束並檢討</button>
       <button class="btn btn-ghost btn-small" id="btn-show-conditions">情境條件</button>
     </header>
     <div class="conditions-banner" id="conditions-banner" hidden></div>
     <div class="messages" id="messages"></div>
     <footer class="composer">
+      <button class="btn btn-ghost mic-btn" id="btn-mic" title="語音輸入(用講的)" aria-label="語音輸入" hidden>🎤</button>
       <textarea id="composer-input" rows="2" placeholder="輸入訊息⋯(Enter 送出,Shift+Enter 換行)"></textarea>
       <button class="btn btn-primary" id="btn-send">送出</button>
     </footer>
@@ -419,11 +424,50 @@
   </form>
 </dialog>
 
+<!-- 預測記錄 -->
+<dialog id="modal-predictions" class="modal-wide">
+  <div class="modal-form">
+    <h3>預測記錄<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <p class="hint" id="predictions-tally"></p>
+    <div class="predictions-list" id="predictions-list"></div>
+  </div>
+</dialog>
+
+<!-- persona 版本歷史 -->
+<dialog id="modal-versions" class="modal-wide">
+  <div class="modal-form">
+    <h3>persona 版本歷史<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <p class="hint">每次重蒸餾 / 編輯 persona 前會自動存一份(最多留 20 份)。點時間可預覽,「回溯」會還原成該版本——回溯前也會先把目前這份存起來,所以隨時能再還原回來。</p>
+    <div class="versions-layout">
+      <ul class="versions-list" id="versions-list"></ul>
+      <article class="md-body versions-preview" id="versions-preview"></article>
+    </div>
+  </div>
+</dialog>
+
+<!-- 跨對話記憶 檢視 / 編輯 -->
+<dialog id="modal-memory" class="modal-wide">
+  <div class="modal-form">
+    <h3>跨對話記憶
+      <span class="modal-head-actions">
+        <button class="btn btn-primary btn-small" id="btn-memory-save">儲存</button>
+        <button class="btn btn-ghost btn-small" id="btn-memory-clear">清空</button>
+        <button class="btn btn-ghost btn-small modal-x" data-close>✕</button>
+      </span>
+    </h3>
+    <p class="hint">這是此人物「跨對話」記得、關於你與你們關係的事,會注入每一場對話。可手動編輯。要累積記憶,在對話中按「更新記憶」。</p>
+    <textarea class="persona-editor" id="memory-editor" spellcheck="false" placeholder="(還沒有記憶。在對話裡按「更新記憶」開始累積,或直接在這裡手寫。)"></textarea>
+  </div>
+</dialog>
+
 <!-- persona 檢視 / 編輯 -->
 <dialog id="modal-persona" class="modal-wide">
   <div class="modal-form">
     <h3>persona.md
       <span class="modal-head-actions">
+        <button class="btn btn-ghost btn-small" id="btn-persona-copy" title="複製成可貼進 Claude / ChatGPT 的系統提示詞">複製為提示詞</button>
+        <button class="btn btn-ghost btn-small" id="btn-persona-download" title="下載 persona.md,可分享或備份">下載 .md</button>
+        <button class="btn btn-ghost btn-small" id="btn-persona-versions" title="檢視 / 回溯歷史版本">版本歷史</button>
         <button class="btn btn-ghost btn-small" id="btn-persona-toggle">切換編輯</button>
         <button class="btn btn-primary btn-small" id="btn-persona-save" hidden>儲存</button>
         <button class="btn btn-ghost btn-small modal-x" data-close>✕</button>
