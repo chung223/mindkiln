@@ -23,18 +23,29 @@ const CHAT_NOISE = [
 // 媒體佔位符(整段訊息就只有這個時丟棄)
 const MEDIA_ONLY = /^\s*[<\[(]?\s*(媒體|媒体|照片|圖片|图片|貼圖|贴图|表情|動畫貼圖|影片|视频|語音|语音|檔案|文件|位置|名片|Media omitted|Photo|Video|Sticker|Image|GIF|Voice|Audio|File|Location|已收回|撤回|貼圖已刪除)\s*[>\])]?\s*$/i;
 
-// 各平台的「時間戳 + 發言者:」行首樣式
+// iOS / LINE 匯出常在行首插入不可見的雙向控制字元,先清掉再比對
+const INVISIBLE = /[​-‏‪-‮⁦-⁩﻿]/g;
+const stripInvisible = (s) => s.replace(INVISIBLE, '');
+// 中文時間常見「晚上 9:44」「凌晨 12:25」等,時分前可帶中文時段詞
+const MERIDIEM = '(?:上午|下午|凌晨|清晨|早上|中午|晚上|傍晚|夜間|AM|PM)';
+
+// 各平台的「時間戳 + 發言者:」行首樣式(比對前已 stripInvisible)
 const CHAT_LINE_PATTERNS = [
-  // WhatsApp: [2023/5/1, 14:03:22] 阿明: 訊息  或  2023/5/1, 14:03 - 阿明: 訊息
-  { re: /^\s*\[?\d{1,4}[/.\-]\d{1,2}[/.\-]\d{1,2}[,\s]+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[APap][Mm])?\]?\s*[-–]?\s*([^:：]{1,40})[:：]\s*(.*)$/ },
+  // WhatsApp / iOS: [2023/5/1, 14:03:22] 阿明: 訊息  ·  [2026/2/24 晚上9:44:29] 小美: 訊息  ·  2023/5/1, 14:03 - 阿明: 訊息
+  { re: new RegExp(`^\\s*\\[?\\d{1,4}[/.\\-]\\d{1,2}[/.\\-]\\d{1,2}[,\\s]+${MERIDIEM}?\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*${MERIDIEM}?\\]?\\s*[-–]?\\s*([^:：]{1,40})[:：]\\s*(.*)$`) },
   // LINE 匯出: 時間<Tab>名字<Tab>訊息  (例:  下午 2:03\t阿明\t訊息)
-  { re: /^\s*(?:上午|下午|AM|PM)?\s*\d{1,2}:\d{2}\t([^\t]{1,40})\t(.*)$/ },
+  { re: new RegExp(`^\\s*${MERIDIEM}?\\s*\\d{1,2}:\\d{2}\\t([^\\t]{1,40})\\t(.*)$`) },
   // 泛用: 名字: 訊息(需夠短的名字,避免誤判一般冒號句)
   { re: /^\s*([\p{L}\p{N}_@.\- ]{1,20})[:：]\s+(.+)$/u, weak: true },
 ];
 
+// 行首的日期(WhatsApp 內嵌 或 LINE 獨立表頭),抓出來當時間線錨點
+const DATE_AT_START = /^\s*\[?(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\b/;
+// LINE 匯出常把日期單獨放一行:「2025/12/11(週四)」「2026/7/1（星期二）」
+const DATE_HEADER = /^\s*(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\s*(?:[（(【][^)）】]*[)）】])?\s*$/;
+
 export function looksLikeChatExport(text) {
-  const lines = text.split(/\r?\n/).slice(0, 60).filter((l) => l.trim());
+  const lines = text.split(/\r?\n/).slice(0, 60).map(stripInvisible).filter((l) => l.trim());
   if (lines.length < 5) return false;
   let hits = 0;
   for (const l of lines) {
@@ -43,18 +54,34 @@ export function looksLikeChatExport(text) {
   return hits >= Math.max(3, lines.length * 0.3);
 }
 
-// 把聊天匯出清成統一的「發言者: 內容」串流,並丟掉系統/媒體噪音
+// 把聊天匯出清成統一的「發言者: 內容」串流,並丟掉系統/媒體噪音。
+// 保留「日期錨點」(訊息時分不留,但日期換行時插入「—— YYYY/M/D ——」分隔),
+// 讓時間線維度能可靠地把每段對話對應到正確日期。
 export function normalizeChatExport(text) {
   const out = [];
   let lastSpeaker = null;
+  let currentDate = null;
+  const emitDate = (y, m, d) => {
+    const key = `${y}/${Number(m)}/${Number(d)}`;
+    if (key !== currentDate) {
+      currentDate = key;
+      out.push(`—— ${key} ——`);
+      lastSpeaker = null; // 換日:續行不可跨日誤掛
+    }
+  };
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/​/g, '').trimEnd();
+    const line = stripInvisible(raw).trimEnd();
     if (!line.trim()) continue;
+    // 純日期表頭行(LINE 格式:日期單獨一行)
+    const dh = line.match(DATE_HEADER);
+    if (dh) { emitDate(dh[1], dh[2], dh[3]); continue; }
     if (CHAT_NOISE.some((re) => re.test(line))) continue;
     let matched = false;
     for (const p of CHAT_LINE_PATTERNS) {
       const m = line.match(p.re);
       if (m) {
+        const dm = line.match(DATE_AT_START); // WhatsApp 行首內嵌日期
+        if (dm) emitDate(dm[1], dm[2], dm[3]);
         const speaker = m[1].trim();
         const msg = (m[2] || '').trim();
         matched = true;
@@ -69,8 +96,7 @@ export function normalizeChatExport(text) {
     }
     if (!matched) {
       // 續行(同一發言者的多行訊息)
-      if (lastSpeaker) out.push(line.trim());
-      else out.push(line.trim());
+      out.push(line.trim());
     }
   }
   return out.join('\n');

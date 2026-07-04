@@ -75,12 +75,27 @@ test('looksLikeChatExport detects WhatsApp export', () => {
   assert.equal(looksLikeChatExport('這是一段普通的文章。\n沒有時間戳。'), false);
 });
 
-test('normalizeChatExport strips timestamps, system lines, media placeholders', () => {
+test('normalizeChatExport strips clock times + noise, keeps date anchors', () => {
   const out = normalizeChatExport(WHATSAPP);
   assert.ok(out.includes('阿明: 第一性原理很重要'));
   assert.ok(!out.includes('end-to-end encrypted'), 'system line dropped');
   assert.ok(!out.includes('Media omitted'), 'media placeholder dropped');
-  assert.ok(!/\d{4}\/\d/.test(out), 'timestamps removed');
+  assert.ok(!/\d{1,2}:\d{2}/.test(out), 'per-message clock times removed');
+  assert.ok(out.includes('—— 2023/5/1 ——'), 'date anchor preserved for timeline');
+  assert.equal((out.match(/—— 2023\/5\/1 ——/g) || []).length, 1, 'one divider per date, not per message');
+});
+
+test('normalizeChatExport handles Chinese-meridiem iOS export + date changes', () => {
+  const ios = [
+    '‎[2026/2/24 晚上9:44:29] 小美: 剛到職約兩週',
+    '[2026/2/24 晚上9:45:01] 阿明: 辛苦了',
+    '[2026/3/25 凌晨12:25:20] 小美: 今天好累',
+  ].join('\n');
+  assert.equal(looksLikeChatExport(ios + '\n' + ios), true, 'detected despite 晚上/凌晨');
+  const out = normalizeChatExport(ios);
+  assert.ok(out.includes('小美: 剛到職約兩週'));
+  assert.ok(out.includes('—— 2026/2/24 ——'), 'first date anchor');
+  assert.ok(out.includes('—— 2026/3/25 ——'), 'second date anchor kept (2026 not lost)');
 });
 
 test('detectSpeakers tallies speaker frequencies', () => {
