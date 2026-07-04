@@ -189,6 +189,12 @@ export function writePersona(id, content) {
   atomicWrite(personaPath(id), content);
 }
 
+export function writeResearchFile(id, fileName, content) {
+  const dir = researchDir(id);
+  fs.mkdirSync(dir, { recursive: true });
+  atomicWrite(path.join(dir, path.basename(fileName)), content);
+}
+
 export function listResearch(id) {
   const dir = researchDir(id);
   if (!fs.existsSync(dir)) return [];

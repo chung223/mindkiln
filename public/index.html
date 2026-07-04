@@ -23,6 +23,7 @@
   </header>
 
   <button class="btn btn-primary btn-block" id="btn-new-character">＋ 造一個新人物</button>
+  <button class="btn btn-ghost btn-block btn-small" id="btn-import-character">⇩ 匯入現成人物</button>
 
   <nav class="character-list" id="character-list" aria-label="人物列表"></nav>
 
@@ -315,6 +316,29 @@
       <button type="button" class="btn btn-ghost" id="btn-backup">備份資料</button>
       <button type="button" class="btn btn-ghost" data-close>取消</button>
       <button type="submit" class="btn btn-primary">儲存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 匯入現成人物 -->
+<dialog id="modal-import">
+  <form method="dialog" class="modal-form" id="form-import">
+    <h3>匯入現成人物</h3>
+    <p class="hint">匯入別人已經蒸餾好、<b>nuwa-skill 格式</b>的人物(含 <code>SKILL.md</code>/<code>persona.md</code> 與 <code>research/</code>)。免蒸餾,匯入即可對話、預測、加入議事會或關係練習。</p>
+    <label>GitHub 儲存庫網址
+      <input type="text" id="import-url" placeholder="例:https://github.com/hotcoffeeshake/tong-jincheng-skill">
+    </label>
+    <label>人物名稱(選填,留空則自動命名)
+      <input type="text" id="import-name" placeholder="例:童錦程">
+    </label>
+    <details class="cond-details">
+      <summary>或改用「直接貼上 persona 文字」</summary>
+      <label>persona / SKILL 內容<textarea id="import-text" rows="5" placeholder="把 SKILL.md 或 persona.md 的內容整段貼進來"></textarea></label>
+    </details>
+    <p class="hint" id="import-status" hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" data-close>取消</button>
+      <button type="submit" class="btn btn-primary" id="btn-import-submit">匯入</button>
     </div>
   </form>
 </dialog>

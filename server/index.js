@@ -15,6 +15,7 @@ import {
 import { handleCouncilMessage } from './council.js';
 import { startDistillation, regenerateDimension, getJob, getActiveJobForCharacter, subscribe, cancelJobsForCharacter } from './distill.js';
 import { handleMessage, handleSessionReview } from './chat.js';
+import { handleImport } from './import.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
 import { normalizeAliases, SUBJECT_TYPES, OUTPUT_LANGUAGES } from './store.js';
 import { detectSpeakersForCharacter, estimateDistillation } from './extract.js';
@@ -126,6 +127,9 @@ app.post('/api/characters', wrap((req, res) => {
   const meta = createCharacter(req.body || {});
   res.json({ ...meta, sourcesPath: sourcesDir(meta.id) });
 }));
+
+// 匯入現成的 nuwa-skill 人物(GitHub 網址 或 貼上 persona),免蒸餾
+app.post('/api/import', wrap(handleImport));
 
 app.get('/api/characters/:id', wrap((req, res) => {
   const meta = getCharacter(req.params.id);

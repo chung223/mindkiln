@@ -899,6 +899,38 @@ function bind() {
     }
   });
 
+  // 匯入現成人物(GitHub 網址 或 貼上 persona)
+  $('#btn-import-character').addEventListener('click', () => {
+    $('#form-import').reset();
+    $('#import-status').hidden = true;
+    $('#modal-import').showModal();
+  });
+  $('#form-import').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#btn-import-submit');
+    const status = $('#import-status');
+    const body = {
+      url: $('#import-url').value.trim(),
+      name: $('#import-name').value.trim(),
+      personaText: $('#import-text').value.trim(),
+    };
+    if (!body.url && !body.personaText) { toast('請填 GitHub 網址,或貼上 persona 文字', true); return; }
+    btn.disabled = true;
+    status.hidden = false;
+    status.textContent = '匯入中⋯正在抓取並建立人物(從 GitHub 拉取可能要幾秒)';
+    try {
+      const r = await api('/api/import', { method: 'POST', body });
+      $('#modal-import').close();
+      toast(`已匯入「${r.name}」${r.researchCount ? `(含 ${r.researchCount} 份研究檔)` : ''},可以直接對話了`);
+      await refreshCharacters();
+      await openCharacter(r.id);
+    } catch (err) {
+      status.textContent = `匯入失敗:${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   // persona 檢視 / 編輯
   let personaRaw = '';
   const setPersonaEditMode = (editing) => {
