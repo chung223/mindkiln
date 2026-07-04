@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>女媧工坊 · 蒸餾思維</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='14' fill='%23c8442a'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='%23f2e6cf' font-family='serif' font-weight='bold'>媧</text></svg>">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<aside class="sidebar">
+  <header class="brand">
+    <div class="seal" aria-hidden="true"><span>女</span><span>媧</span></div>
+    <div class="brand-text">
+      <h1>女媧工坊</h1>
+      <p class="tagline">蒸餾思維 · 摶土造人</p>
+    </div>
+  </header>
+
+  <button class="btn btn-primary btn-block" id="btn-new-character">＋ 造一個新人物</button>
+
+  <nav class="character-list" id="character-list" aria-label="人物列表"></nav>
+
+  <footer class="sidebar-footer">
+    <button class="btn btn-ghost btn-block" id="btn-settings">⚙ 設定</button>
+  </footer>
+</aside>
+
+<div class="vertical-rail" aria-hidden="true">練泥・塑形・入爐・蒸餾・成人</div>
+
+<main class="main" id="main">
+
+  <!-- 空狀態 -->
+  <section class="view" id="view-empty">
+    <div class="empty-hero">
+      <div class="empty-seal" aria-hidden="true">媧</div>
+      <h2>從一堆文件裡,煉出一個能對話的人</h2>
+      <p class="empty-steps">
+        <span><i>壹</i>建立人物</span>
+        <span class="sep">→</span>
+        <span><i>貳</i>把此人的文件丟進資料夾</span>
+        <span class="sep">→</span>
+        <span><i>參</i>入爐蒸餾</span>
+        <span class="sep">→</span>
+        <span><i>肆</i>對話或預測</span>
+      </p>
+      <button class="btn btn-primary" id="btn-empty-create">開始造人</button>
+    </div>
+  </section>
+
+  <!-- 人物詳情 -->
+  <section class="view" id="view-character" hidden>
+    <header class="char-header">
+      <div>
+        <h2 id="char-name"></h2>
+        <p class="char-note" id="char-note"></p>
+      </div>
+      <div class="char-header-right">
+        <span class="status-chip" id="char-status"></span>
+        <button class="btn btn-ghost btn-small" id="btn-delete-character" title="刪除人物">刪除</button>
+      </div>
+    </header>
+
+    <div class="panels">
+      <!-- 語料 -->
+      <div class="panel" id="panel-sources">
+        <div class="panel-head">
+          <h3><span class="panel-num">壹</span>語料文件</h3>
+          <div class="panel-actions">
+            <button class="btn btn-ghost btn-small" id="btn-open-folder">開啟資料夾</button>
+            <button class="btn btn-outline btn-small" id="btn-upload">上傳文件</button>
+            <input type="file" id="file-input" multiple hidden
+                   accept=".txt,.md,.markdown,.pdf,.docx,.srt,.vtt,.html,.htm,.json,.csv">
+          </div>
+        </div>
+        <p class="hint">把想蒸餾對象的相關文件(著作、訪談稿、字幕、文章⋯)放進
+          <code id="sources-path"></code>,或直接拖放到下方。</p>
+        <div class="alias-editor">
+          <label for="char-aliases-input">多人對話時,此人的稱呼/帳號</label>
+          <div class="alias-row">
+            <input type="text" id="char-aliases-input" placeholder="例:阿明, @ming123(以逗號分隔;非多人對話可留空)">
+            <button class="btn btn-ghost btn-small" id="btn-detect-speakers" title="從語料自動偵測發言者">偵測發言者</button>
+            <button class="btn btn-ghost btn-small" id="btn-save-aliases">儲存</button>
+          </div>
+          <div class="speaker-chips" id="speaker-chips"></div>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <ul class="file-list" id="file-list"></ul>
+          <p class="dropzone-hint" id="dropzone-hint">將文件拖放到這裡</p>
+        </div>
+      </div>
+
+      <!-- 蒸餾 -->
+      <div class="panel" id="panel-distill">
+        <div class="panel-head">
+          <h3><span class="panel-num">貳</span>入爐蒸餾</h3>
+          <div class="panel-actions">
+            <select id="gear-select" class="select">
+              <option value="standard">標準檔 · 六維度完整蒸餾</option>
+              <option value="quick">快速檔 · 三維度(省時省費)</option>
+            </select>
+            <button class="btn btn-ghost btn-small" id="btn-estimate">試算</button>
+            <button class="btn btn-primary btn-small" id="btn-distill">開始蒸餾</button>
+          </div>
+        </div>
+        <p class="hint">蒸餾會多次呼叫模型分析全部語料,語料越多耗時與費用越高。快速檔僅分析著作、對話、表達三維度。</p>
+        <div class="estimate-box" id="estimate-box" hidden></div>
+        <div class="furnace" id="furnace" hidden>
+          <div class="furnace-phases" id="furnace-phases"></div>
+          <div class="corpus-note" id="corpus-note"></div>
+          <div class="corpus-note" id="quality-note"></div>
+          <div class="dim-grid" id="dim-grid"></div>
+          <p class="furnace-msg" id="furnace-msg"></p>
+        </div>
+      </div>
+
+      <!-- 調研文件 -->
+      <div class="panel" id="panel-research" hidden>
+        <div class="panel-head">
+          <h3><span class="panel-num">參</span>調研文件</h3>
+        </div>
+        <p class="hint">各維度分析與綜合報告——蒸餾的推理過程都在這裡,可審視為何提煉出某個心智模型、哪個維度資訊不足,或重跑單一維度。</p>
+        <ul class="research-list" id="research-list"></ul>
+      </div>
+
+      <!-- 人物檔案 -->
+      <div class="panel" id="panel-persona" hidden>
+        <div class="panel-head">
+          <h3><span class="panel-num">肆</span>人物檔案</h3>
+          <div class="panel-actions">
+            <button class="btn btn-primary btn-small" id="btn-edit-persona">檢視 / 編輯 persona.md</button>
+          </div>
+        </div>
+        <p class="hint" id="persona-hint"></p>
+      </div>
+
+      <!-- 對話 -->
+      <div class="panel" id="panel-chats">
+        <div class="panel-head">
+          <h3><span class="panel-num">伍</span>對話與預測</h3>
+          <div class="panel-actions">
+            <button class="btn btn-outline btn-small" id="btn-new-predict">◆ 新預測</button>
+            <button class="btn btn-primary btn-small" id="btn-new-chat">✦ 新對話</button>
+          </div>
+        </div>
+        <ul class="chat-list" id="chat-list"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 對話視圖 -->
+  <section class="view view-chat" id="view-chat" hidden>
+    <header class="chat-header">
+      <button class="btn btn-ghost btn-small" id="btn-back">← 返回</button>
+      <div class="chat-header-title">
+        <h2 id="chat-char-name"></h2>
+        <span class="mode-chip" id="chat-mode-chip"></span>
+      </div>
+      <button class="btn btn-ghost btn-small" id="btn-show-conditions">情境條件</button>
+    </header>
+    <div class="conditions-banner" id="conditions-banner" hidden></div>
+    <div class="messages" id="messages"></div>
+    <footer class="composer">
+      <textarea id="composer-input" rows="2" placeholder="輸入訊息⋯(Enter 送出,Shift+Enter 換行)"></textarea>
+      <button class="btn btn-primary" id="btn-send">送出</button>
+    </footer>
+  </section>
+</main>
+
+<!-- 新增人物 -->
+<dialog id="modal-new-character">
+  <form method="dialog" class="modal-form" id="form-new-character">
+    <h3>造一個新人物</h3>
+    <label>人物名稱<input type="text" id="new-char-name" required placeholder="例:賈伯斯、我的祖父、某位作家"></label>
+    <label>補充說明(選填)<textarea id="new-char-note" rows="2" placeholder="這個人是誰?你想聚焦哪個面向?"></textarea></label>
+    <label>對話中的稱呼/帳號(選填)
+      <input type="text" id="new-char-aliases" placeholder="例:阿明, @ming123, 小明(以逗號分隔)">
+    </label>
+    <p class="hint">若語料是<b>多人對話</b>(群組聊天、訪談逐字稿),填上此人在紀錄裡的稱呼,蒸餾時只會鎖定他的發言;別人對他的評價則歸入「他者視角」。</p>
+    <div class="field-row">
+      <label>對象類型
+        <select id="new-char-subject" class="select">
+          <option value="public">公眾人物</option>
+          <option value="private">私人(需同意)</option>
+          <option value="self">我自己</option>
+          <option value="fictional">虛構角色</option>
+        </select>
+      </label>
+      <label>輸出語言
+        <select id="new-char-lang" class="select">
+          <option value="zh-Hant">繁體中文</option>
+          <option value="zh-Hans">簡體中文</option>
+          <option value="match-corpus">跟隨語料語言</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+        </select>
+      </label>
+    </div>
+    <label class="checkbox-row" id="consent-row" hidden>
+      <input type="checkbox" id="new-char-consent">
+      <span>我確認蒸餾此私人對象已取得當事人同意。蒸餾在世非公眾人物涉及隱私,產出是可運行的「分身」,請審慎為之。</span>
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" data-close>取消</button>
+      <button type="submit" class="btn btn-primary">建立</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 設定 -->
+<dialog id="modal-settings">
+  <form method="dialog" class="modal-form" id="form-settings">
+    <h3>設定</h3>
+
+    <label>模型來源
+      <select id="setting-provider" class="select">
+        <option value="anthropic">Anthropic 雲端(品質最佳)</option>
+        <option value="compat">Anthropic 相容端點 · MiniMax 等</option>
+        <option value="openai">本地模型 · OpenAI 相容(Ollama / LM Studio 等)</option>
+      </select>
+    </label>
+
+    <!-- Anthropic -->
+    <div class="provider-fields" id="fields-anthropic">
+      <label>Anthropic API 金鑰
+        <input type="password" id="setting-apikey" placeholder="sk-ant-⋯(留空則使用環境變數/ant 登入)">
+      </label>
+      <p class="hint" id="apikey-status"></p>
+      <label>模型
+        <select id="setting-model" class="select">
+          <option value="claude-opus-4-8">claude-opus-4-8(預設,品質最佳)</option>
+          <option value="claude-sonnet-5">claude-sonnet-5(較省費用)</option>
+          <option value="claude-haiku-4-5">claude-haiku-4-5(最快最省,品質有限)</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Anthropic 相容端點(MiniMax 等) -->
+    <div class="provider-fields" id="fields-compat" hidden>
+      <label>Base URL
+        <input type="text" id="setting-compat-url" placeholder="https://api.minimaxi.com/anthropic">
+      </label>
+      <label>模型名稱
+        <input type="text" id="setting-compat-model" placeholder="MiniMax-M3">
+      </label>
+      <label>API 金鑰
+        <input type="password" id="setting-compat-key" placeholder="你的 MiniMax API 金鑰">
+      </label>
+      <p class="hint">走 Anthropic Messages API 相容端點,重用雲端串流邏輯。MiniMax 模型:<code>MiniMax-M3</code>(1M 上下文,蒸餾建議)、<code>MiniMax-M2.7</code> 等。MiniMax 預設吐簡體,建議搭配下方「強制繁體輸出」。</p>
+    </div>
+
+    <!-- OpenAI 相容本地模型 -->
+    <div class="provider-fields" id="fields-openai" hidden>
+      <label>Base URL
+        <input type="text" id="setting-openai-url" placeholder="http://localhost:11434/v1">
+      </label>
+      <label>模型名稱
+        <input type="text" id="setting-openai-model" placeholder="例:llama3.1、qwen2.5:14b、mistral">
+      </label>
+      <label>API 金鑰(選填,本地通常不需)
+        <input type="password" id="setting-openai-key" placeholder="留空即可">
+      </label>
+      <p class="hint">⚠ 本地小模型的蒸餾品質(尤其心智模型提煉)明顯不如雲端 Opus;建議搭配快速檔、或大參數量的長上下文模型。對話模式則較友善。語料上限已自動下修為 12 萬字。</p>
+    </div>
+
+    <label>維度分析模型(選填,進階省錢)
+      <input type="text" id="setting-dim-model" placeholder="留空=與主模型相同;可填便宜模型如 claude-haiku-4-5 / MiniMax-M2.7">
+    </label>
+    <p class="hint">維度分析是吃 token 的機械式抽取,可指定便宜模型;真正難的綜合提煉與 persona 組裝仍用上方主模型。</p>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="setting-force-trad">
+      <span>強制繁體輸出(OpenCC)—— 蒸餾與對話輸出轉為繁體中文。非 Claude 模型(MiniMax、本地模型常吐簡體)強烈建議開啟。</span>
+    </label>
+    <label id="variant-label">繁體變體
+      <select id="setting-zh-variant" class="select">
+        <option value="twp">台灣正體 + 台灣詞彙(軟件→軟體、内存→記憶體)</option>
+        <option value="tw">台灣正體,只轉字不改詞(保留對方原本用語)</option>
+        <option value="hk">香港繁體</option>
+      </select>
+    </label>
+    <p class="hint">蒸餾大陸講者時,「只轉字不改詞」能保留他真實的用語習慣(表達DNA),不被台灣化。</p>
+
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="btn-backup">備份資料</button>
+      <button type="button" class="btn btn-ghost" data-close>取消</button>
+      <button type="submit" class="btn btn-primary">儲存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 新對話(含情境條件) -->
+<dialog id="modal-new-chat">
+  <form method="dialog" class="modal-form" id="form-new-chat">
+    <h3 id="new-chat-title">新對話</h3>
+    <p class="hint" id="new-chat-hint"></p>
+    <label>對話標題(選填)<input type="text" id="cond-title" placeholder="留空自動以時間命名"></label>
+    <details class="cond-details" id="cond-details">
+      <summary>情境條件(選填)—設定後整段對話都會遵守</summary>
+      <label>情境設定<input type="text" id="cond-scenario" placeholder="例:你正在接受一場深度專訪"></label>
+      <label>時間點<input type="text" id="cond-timepoint" placeholder="例:2010年(此後的事你不知道)"></label>
+      <label>對話對象身份<input type="text" id="cond-interlocutor" placeholder="例:向你請教的年輕創業者"></label>
+      <label>表達約束<input type="text" id="cond-style" placeholder="例:回答簡短犀利,不超過三句"></label>
+      <label>其他條件<input type="text" id="cond-extra" placeholder="任何其他設定"></label>
+    </details>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" data-close>取消</button>
+      <button type="submit" class="btn btn-primary">開始</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- persona 檢視 / 編輯 -->
+<dialog id="modal-persona" class="modal-wide">
+  <div class="modal-form">
+    <h3>persona.md
+      <span class="modal-head-actions">
+        <button class="btn btn-ghost btn-small" id="btn-persona-toggle">切換編輯</button>
+        <button class="btn btn-primary btn-small" id="btn-persona-save" hidden>儲存</button>
+        <button class="btn btn-ghost btn-small modal-x" data-close>✕</button>
+      </span>
+    </h3>
+    <article class="md-body" id="persona-body"></article>
+    <textarea class="persona-editor" id="persona-editor" hidden spellcheck="false"></textarea>
+    <p class="hint">改完儲存即刻生效,下次對話就用新的檔案。</p>
+  </div>
+</dialog>
+
+<!-- 調研文件檢視 -->
+<dialog id="modal-research" class="modal-wide">
+  <div class="modal-form">
+    <h3 id="research-title">調研文件<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <article class="md-body" id="research-body"></article>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" popover="manual"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
