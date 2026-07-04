@@ -41,17 +41,96 @@ const CHAT_LINE_PATTERNS = [
 
 // 行首的日期(WhatsApp 內嵌 或 LINE 獨立表頭),抓出來當時間線錨點
 const DATE_AT_START = /^\s*\[?(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\b/;
-// LINE 匯出常把日期單獨放一行:「2025/12/11(週四)」「2026/7/1（星期二）」
-const DATE_HEADER = /^\s*(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\s*(?:[（(【][^)）】]*[)）】])?\s*$/;
+// LINE 匯出常把日期單獨放一行:「2025/12/11(週四)」「2026/7/1（星期二）」「2025.02.24 星期一」
+// 日期分隔支援 / . -;尾綴可為括號組 (週四)/（星期二） 或裸「星期X」「週X」(點分隔匯出常見)
+const DATE_HEADER = /^\s*(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})\s*(?:[（(【][^)）】]*[)）】]|星期[一二三四五六日天]|週[一二三四五六日天])?\s*$/;
+
+// ---------- 空格分隔的 LINE 匯出變體 ----------
+// 形如「HH:MM 發言者 訊息」,時間、發言者、訊息全以空白分隔,且發言者名字本身可能含空格
+// (例:「15:01 古惠如 Ruth 08-777-2007」)。名字/訊息邊界模糊,故先掃全檔找出「反覆
+// 出現的名字前綴」再據以切分;偵測門檻刻意設高(高比例行以 HH:MM 開頭 + 至少兩位反覆
+// 出現的發言者),以免把帶時間戳的一般文件(行程表、日誌、散文)誤判為聊天而污染語料。
+const SPACE_LINE_RE = new RegExp(`^\\s*${MERIDIEM}?\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s+(\\S.*)$`);
+// 合格的名字 token:以字母(任一語系,含中日文)開頭且不過長;可濾掉電話、#標籤、[日誌等級]
+const nameTokenOk = (t) => t.length <= 16 && /^\p{L}/u.test(t);
+
+// 依「名字在該發言者所有訊息中固定不變」的特性,推斷名字佔幾個 token(1–3)。
+function spaceNameLength(group) {
+  let len = 1;
+  for (let pos = 1; pos < 3; pos++) {
+    const counts = new Map();
+    let considered = 0;
+    for (const toks of group) {
+      if (toks.length <= pos) continue;
+      considered++;
+      counts.set(toks[pos], (counts.get(toks[pos]) || 0) + 1);
+    }
+    if (considered < 3) break; // 樣本太少,不敢貿然把此位置併入名字
+    let best = null;
+    let bestCount = 0;
+    for (const [v, c] of counts) if (c > bestCount) { best = v; bestCount = c; }
+    // 只有此位置幾乎總是同一個 token(≥0.8)且該 token 像名字、非媒體佔位符時才納入名字
+    if (best != null && bestCount / considered >= 0.8 && nameTokenOk(best) && !MEDIA_ONLY.test(best)) {
+      len = pos + 1;
+    } else break;
+  }
+  return len;
+}
+
+// 掃全檔判斷是否為此變體。回傳 Map<名字首 token, 名字 token 數>;不像此格式則回傳 null。
+function detectSpaceLineExport(text) {
+  let nonEmpty = 0;
+  let timeLines = 0;
+  let dateLines = 0;
+  const groups = new Map(); // 名字首 token -> 該發言者各行的完整 token 陣列
+  for (const raw of text.split(/\r?\n/)) {
+    const line = stripInvisible(raw).trim();
+    if (!line) continue;
+    nonEmpty++;
+    if (DATE_HEADER.test(line)) { dateLines++; continue; }
+    if (line.includes('\t')) continue; // tab 變體另有樣式處理
+    const m = line.match(SPACE_LINE_RE);
+    if (!m) continue;
+    const tokens = m[1].split(/\s+/).filter(Boolean);
+    if (!tokens.length) continue;
+    timeLines++;
+    const t1 = tokens[0];
+    if (!nameTokenOk(t1)) continue;
+    if (!groups.has(t1)) groups.set(t1, []);
+    groups.get(t1).push(tokens);
+  }
+  if (nonEmpty < 8 || timeLines < 5) return null;
+  if ((timeLines + dateLines) / nonEmpty < 0.7) return null; // 需高比例行是時間戳訊息/日期表頭
+  const speakers = new Map();
+  for (const [t1, group] of groups) {
+    if (group.length < 2) continue; // 名字須反覆出現,單次者不算
+    speakers.set(t1, spaceNameLength(group));
+  }
+  return speakers.size >= 2 ? speakers : null; // 對話至少要有兩位發言者
+}
+
+// 依已偵測的發言者名字表切分一行空格分隔訊息;未知的首 token 退回以 1 個 token 當名字。
+function splitSpaceLine(line, speakers) {
+  if (line.includes('\t')) return null;
+  const m = line.match(SPACE_LINE_RE);
+  if (!m) return null;
+  const tokens = m[1].split(/\s+/).filter(Boolean);
+  if (!tokens.length) return null;
+  const nameLen = Math.min(speakers.get(tokens[0]) || 1, tokens.length);
+  return { speaker: tokens.slice(0, nameLen).join(' '), msg: tokens.slice(nameLen).join(' ') };
+}
 
 export function looksLikeChatExport(text) {
   const lines = text.split(/\r?\n/).slice(0, 60).map(stripInvisible).filter((l) => l.trim());
-  if (lines.length < 5) return false;
-  let hits = 0;
-  for (const l of lines) {
-    if (CHAT_LINE_PATTERNS.slice(0, 2).some((p) => p.re.test(l))) hits++;
+  if (lines.length >= 5) {
+    let hits = 0;
+    for (const l of lines) {
+      if (CHAT_LINE_PATTERNS.slice(0, 2).some((p) => p.re.test(l))) hits++;
+    }
+    if (hits >= Math.max(3, lines.length * 0.3)) return true;
   }
-  return hits >= Math.max(3, lines.length * 0.3);
+  // 空格分隔的 LINE 匯出變體(整份高比例行以 HH:MM 開頭 + 反覆出現的發言者)
+  return detectSpaceLineExport(text) !== null;
 }
 
 // 把聊天匯出清成統一的「發言者: 內容」串流,並丟掉系統/媒體噪音。
@@ -59,6 +138,7 @@ export function looksLikeChatExport(text) {
 // 讓時間線維度能可靠地把每段對話對應到正確日期。
 export function normalizeChatExport(text) {
   const out = [];
+  const spaceSpeakers = detectSpaceLineExport(text); // 空格分隔 LINE 變體的發言者名字表(否則 null)
   let lastSpeaker = null;
   let currentDate = null;
   const emitDate = (y, m, d) => {
@@ -76,6 +156,19 @@ export function normalizeChatExport(text) {
     const dh = line.match(DATE_HEADER);
     if (dh) { emitDate(dh[1], dh[2], dh[3]); continue; }
     if (CHAT_NOISE.some((re) => re.test(line))) continue;
+    // 空格分隔 LINE 變體:用預掃的發言者名字表切分,避免泛用弱樣式把散文行誤判為聊天
+    if (spaceSpeakers) {
+      const sm = splitSpaceLine(line, spaceSpeakers);
+      if (sm) {
+        const msg = sm.msg.trim();
+        if (!msg || MEDIA_ONLY.test(msg)) { lastSpeaker = null; continue; }
+        out.push(`${sm.speaker}: ${msg}`);
+        lastSpeaker = sm.speaker;
+        continue;
+      }
+      out.push(line.trim()); // 非時間行:視為上一則訊息的續行
+      continue;
+    }
     let matched = false;
     for (const p of CHAT_LINE_PATTERNS) {
       const m = line.match(p.re);
