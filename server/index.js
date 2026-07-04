@@ -1,3 +1,4 @@
+import './env.js'; // 必須最先執行:載入 .env,讓下方 store.js 讀得到 NUWA_DATA_DIR
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
