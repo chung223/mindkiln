@@ -6,11 +6,30 @@ const state = {
   characters: [],
   current: null,      // 當前人物詳情
   chat: null,         // 當前對話
+  council: null,      // 當前議事會
   jobSource: null,    // 蒸餾 SSE
   sending: false,
 };
 
+// 議事會中每位 persona 的固定色彩(依索引循環)
+const PERSONA_COLORS = ['var(--gold)', 'var(--jade)', 'var(--cinnabar-bright)', '#8fa8c8', '#c88fb0', '#b0c88f'];
+
 const STATUS_LABEL = { new: '待煉', distilling: '煉製中', ready: '已成', error: '失敗' };
+
+const MODE_LABELS = {
+  chat: '對話', predict: '預測', rehearse: '排練', letter: '未寄出的信',
+  perspective: '對方視角', reflect: '反思陪伴',
+};
+// 感情處理模式(顯示不同色彩 + 開場提示)
+const EMOTIONAL_MODES = new Set(['rehearse', 'letter', 'perspective', 'reflect']);
+const MODE_HINTS = {
+  chat: (n) => `以「${n}」的身份進行角色扮演對話。`,
+  predict: () => '描述一個情境,預測此人會如何反應或決策(附推理依據與信心度)。',
+  rehearse: (n) => `練習說出口不易的話,由「${n}」用可能的方式真實回應——為真實對話做準備,或先把情緒走一遍。`,
+  letter: (n) => `寫下想說卻沒說出口的話,收到一封「${n}」語氣的回信。幫你放下的練習。`,
+  perspective: (n) => `描述你們之間發生的事,讓「${n}」說出當時對方那一邊可能的心境。幫你看見全貌。`,
+  reflect: (n) => `「${n}」陪你聊,同時是一面鏡子——溫柔地照見你自己的模式。`,
+};
 const PHASES = [
   { key: 'corpus', label: '練泥 · 載入語料' },
   { key: 'research', label: '入爐 · 維度分析' },
@@ -144,6 +163,8 @@ async function refreshCharacters() {
     nav.appendChild(card);
   }
   if (!state.characters.length && !state.current) showView('view-empty');
+  // 人物就緒數改變時,議事會區塊的可見性/可召集性隨之更新
+  if (typeof refreshCouncils === 'function') refreshCouncils().catch(() => {});
 }
 
 // ---------- 人物詳情 ----------
@@ -412,7 +433,7 @@ function renderChats(chats) {
   for (const ch of chats) {
     const li = document.createElement('li');
     li.innerHTML = `
-      <span class="mode-chip ${ch.mode === 'predict' ? 'predict' : ''}">${ch.mode === 'predict' ? '預測' : '對話'}</span>
+      <span class="mode-chip ${ch.mode === 'predict' ? 'predict' : EMOTIONAL_MODES.has(ch.mode) ? 'emotional' : ''}">${MODE_LABELS[ch.mode] || '對話'}</span>
       <span class="cl-title">${esc(ch.title)}</span>
       <span class="cl-meta">${ch.messageCount} 則</span>
       <button class="cl-del" title="刪除">✕</button>`;
@@ -427,13 +448,154 @@ function renderChats(chats) {
   }
 }
 
+// ---------- 議事會 Advisory Board ----------
+
+async function refreshCouncils() {
+  const councils = await api('/api/councils');
+  const section = $('#council-section');
+  const ul = $('#council-list');
+  section.hidden = councils.length === 0 && state.characters.filter((c) => c.hasPersona).length < 2;
+  ul.innerHTML = '';
+  for (const c of councils) {
+    const li = document.createElement('div');
+    li.className = 'council-card' + (state.council?.id === c.id ? ' active' : '');
+    li.innerHTML = `
+      <div class="cc-name">${esc(c.title)}</div>
+      <div class="cc-meta">${c.participants.map((p) => esc(p.name)).join(' · ')}</div>`;
+    li.addEventListener('click', () => openCouncil(c.id).catch((err) => toast(err.message, true)));
+    ul.appendChild(li);
+  }
+}
+
+function personaColor(council, personaId) {
+  const idx = council.participants.findIndex((p) => p.id === personaId);
+  return PERSONA_COLORS[(idx < 0 ? 0 : idx) % PERSONA_COLORS.length];
+}
+
+function appendCouncilMessage(role, content, personaName, color) {
+  const box = $('#council-messages');
+  const div = document.createElement('div');
+  if (role === 'user') {
+    div.className = 'msg msg-user';
+    div.innerHTML = `<div class="msg-role">你</div><div class="msg-bubble">${esc(content).replace(/\n/g, '<br>')}</div>`;
+  } else {
+    div.className = 'msg msg-assistant';
+    div.innerHTML = `<div class="msg-role" style="color:${color}">${esc(personaName)}</div>
+      <div class="msg-bubble" style="border-color:${color}44"><div class="md-body">${renderMd(content)}</div></div>`;
+  }
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+async function openCouncil(councilId) {
+  state.councilCtrl?.abort(); // 中止上一個議事會仍在跑的串流
+  state.councilCtrl = null;
+  const council = await api(`/api/councils/${encodeURIComponent(councilId)}`);
+  state.council = council;
+  state.chat = null;
+  $('#council-name').textContent = council.title;
+  $('#council-members').textContent = council.participants.map((p) => p.name).join(' · ');
+  const box = $('#council-messages');
+  box.innerHTML = '';
+  for (const m of council.messages) {
+    if (m.role === 'user') appendCouncilMessage('user', m.content);
+    else appendCouncilMessage('persona', m.content, m.personaName, personaColor(council, m.personaId));
+  }
+  showView('view-council');
+  refreshCouncils();
+  $('#council-input').focus();
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendCouncilMessage() {
+  if (state.sending || !state.council) return;
+  const input = $('#council-input');
+  const content = input.value.trim();
+  if (!content) return;
+  const council = state.council;          // 綁定本次送出的議事會
+  const ctrl = new AbortController();
+  state.councilCtrl = ctrl;
+  state.sending = true;
+  $('#btn-council-send').disabled = true;
+  input.value = '';
+  appendCouncilMessage('user', content);
+  const box = $('#council-messages');
+
+  const bubbles = {}; // personaId -> { body, acc }
+  try {
+    const res = await fetch(`/api/councils/${encodeURIComponent(council.id)}/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }), signal: ctrl.signal,
+    });
+    if (!res.ok || !(res.headers.get('content-type') || '').includes('text/event-stream')) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `請求失敗（${res.status}）`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const raw = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let event = 'message', data = '';
+        for (const l of raw.split('\n')) {
+          if (l.startsWith('event: ')) event = l.slice(7).trim();
+          else if (l.startsWith('data: ')) data += l.slice(6);
+        }
+        if (!data) continue;
+        let p;
+        try { p = JSON.parse(data); } catch { continue; }
+        if (council !== state.council) continue; // 已切換到別的議事會/離開:不再寫入畫面
+        if (event === 'persona_start') {
+          const name = council.participants.find((x) => x.id === p.personaId)?.name || p.name;
+          const div = appendCouncilMessage('persona', '', name, personaColor(council, p.personaId));
+          bubbles[p.personaId] = { body: div.querySelector('.md-body'), acc: '' };
+        } else if (event === 'delta') {
+          const b = bubbles[p.personaId];
+          if (b) {
+            b.acc += p.text;
+            const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+            b.body.innerHTML = renderMd(b.acc);
+            if (stick) box.scrollTop = box.scrollHeight;
+          }
+        } else if (event === 'persona_error') {
+          const b = bubbles[p.personaId];
+          if (b) b.body.innerHTML = `<span style="color:var(--cinnabar-bright)">${esc(p.message)}</span>`;
+        } else if (event === 'error') {
+          appendError2($('#council-messages'), p.message || '發生錯誤');
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError' && council === state.council) appendError2($('#council-messages'), err.message);
+  } finally {
+    if (state.councilCtrl === ctrl) state.councilCtrl = null;
+    state.sending = false;
+    $('#btn-council-send').disabled = false;
+    if (council === state.council) input.focus();
+  }
+}
+
+function appendError2(box, msg) {
+  const div = document.createElement('div');
+  div.className = 'msg-error';
+  div.textContent = msg;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
 async function openChat(chatId) {
   const chat = await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(chatId)}`);
   state.chat = chat;
   $('#chat-char-name').textContent = state.current.name;
   const chip = $('#chat-mode-chip');
-  chip.textContent = chat.mode === 'predict' ? '預測模式' : '對話模式';
-  chip.className = 'mode-chip' + (chat.mode === 'predict' ? ' predict' : '');
+  chip.textContent = (MODE_LABELS[chat.mode] || '對話') + '模式';
+  chip.className = 'mode-chip' + (chat.mode === 'predict' ? ' predict' : EMOTIONAL_MODES.has(chat.mode) ? ' emotional' : '');
   renderConditionsBanner(chat.conditions);
   const box = $('#messages');
   box.innerHTML = '';
@@ -859,21 +1021,20 @@ function bind() {
     }
   });
 
-  // 新對話 / 新預測
-  let newChatMode = 'chat';
-  const openNewChat = (mode) => {
+  // 開新對話(模式選擇)
+  const modeHint = () => {
+    const m = $('#new-chat-mode').value;
+    const name = state.current?.name || '此人';
+    $('#new-chat-hint').textContent = MODE_HINTS[m]?.(name) || '';
+  };
+  $('#new-chat-mode').addEventListener('change', modeHint);
+  const openNewChat = () => {
     if (!state.current.hasPersona) { toast('請先完成蒸餾,才能開始對話', true); return; }
-    newChatMode = mode;
     $('#form-new-chat').reset();
-    $('#new-chat-title').textContent = mode === 'predict' ? '新預測' : '新對話';
-    $('#new-chat-hint').textContent =
-      mode === 'predict'
-        ? '描述一個情境,預測此人會如何反應或決策(附推理依據與信心度)。'
-        : `以「${state.current.name}」的身份進行角色扮演對話。`;
+    modeHint();
     $('#modal-new-chat').showModal();
   };
-  $('#btn-new-chat').addEventListener('click', () => openNewChat('chat'));
-  $('#btn-new-predict').addEventListener('click', () => openNewChat('predict'));
+  $('#btn-new-chat').addEventListener('click', openNewChat);
   $('#form-new-chat').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -887,7 +1048,7 @@ function bind() {
       for (const k of Object.keys(conditions)) if (!conditions[k]) delete conditions[k];
       const chat = await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats`, {
         method: 'POST',
-        body: { title: $('#cond-title').value.trim(), mode: newChatMode, conditions },
+        body: { title: $('#cond-title').value.trim(), mode: $('#new-chat-mode').value, conditions },
       });
       $('#modal-new-chat').close();
       await openChat(chat.id);
@@ -918,6 +1079,61 @@ function bind() {
     }
   });
 
+  // 議事會
+  $('#btn-new-council').addEventListener('click', () => {
+    const ready = state.characters.filter((c) => c.hasPersona);
+    if (ready.length < 2) { toast('至少要有 2 位已蒸餾的人物才能召集議事會', true); return; }
+    const picker = $('#council-picker');
+    picker.innerHTML = ready.map((c) => `
+      <label class="council-pick-item">
+        <input type="checkbox" value="${esc(c.id)}"><span>${esc(c.name)}</span>
+      </label>`).join('');
+    $('#council-title').value = '';
+    $('#modal-new-council').showModal();
+  });
+  $('#form-new-council').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const ids = [...document.querySelectorAll('#council-picker input:checked')].map((i) => i.value);
+    if (ids.length < 2) { toast('請至少選 2 位人物', true); return; }
+    try {
+      const council = await api('/api/councils', {
+        method: 'POST', body: { title: $('#council-title').value.trim(), participantIds: ids },
+      });
+      $('#modal-new-council').close();
+      await refreshCouncils();
+      await openCouncil(council.id);
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  $('#btn-council-back').addEventListener('click', () => {
+    state.councilCtrl?.abort();
+    state.councilCtrl = null;
+    state.council = null;
+    showView('view-empty');
+    refreshCouncils();
+  });
+  $('#btn-council-delete').addEventListener('click', async () => {
+    if (!confirm(`刪除議事會「${state.council.title}」?`)) return;
+    try {
+      state.councilCtrl?.abort();
+      state.councilCtrl = null;
+      await api(`/api/councils/${encodeURIComponent(state.council.id)}`, { method: 'DELETE' });
+      state.council = null;
+      showView('view-empty');
+      await refreshCouncils();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  $('#btn-council-send').addEventListener('click', sendCouncilMessage);
+  $('#council-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      sendCouncilMessage();
+    }
+  });
+
   // 視窗層級:文件拖放到 dropzone 以外的地方時,阻止瀏覽器導航去開啟該檔
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => e.preventDefault());
@@ -942,6 +1158,7 @@ function bind() {
 (async function init() {
   bind();
   await refreshCharacters();
+  await refreshCouncils();
   showView('view-empty');
   const cfg = await api('/api/config');
   if (!cfg.hasCredentials) {

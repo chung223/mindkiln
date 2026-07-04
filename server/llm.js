@@ -134,7 +134,13 @@ function toOpenAIMessages(system, messages) {
   const systemText = Array.isArray(system) ? system.map((b) => b.text || '').join('\n\n') : system || '';
   const out = [];
   if (systemText) out.push({ role: 'system', content: systemText });
-  for (const m of messages) out.push({ role: m.role, content: flat(m.content) });
+  // 合併相鄰同角色訊息:議事會等情境會產生連續 user 回合,部分 OpenAI 相容伺服器會拒絕
+  for (const m of messages) {
+    const text = flat(m.content);
+    const last = out[out.length - 1];
+    if (last && last.role === m.role) last.content += `\n\n${text}`;
+    else out.push({ role: m.role, content: text });
+  }
   return out;
 }
 

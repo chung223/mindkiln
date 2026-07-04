@@ -26,6 +26,14 @@
 
   <nav class="character-list" id="character-list" aria-label="人物列表"></nav>
 
+  <div class="council-section" id="council-section" hidden>
+    <div class="council-head">
+      <span>議事會</span>
+      <button class="btn btn-ghost btn-small" id="btn-new-council" title="多個人物同場討論">＋</button>
+    </div>
+    <nav class="council-list" id="council-list" aria-label="議事會列表"></nav>
+  </div>
+
   <footer class="sidebar-footer">
     <button class="btn btn-ghost btn-block" id="btn-settings">⚙ 設定</button>
   </footer>
@@ -144,13 +152,29 @@
         <div class="panel-head">
           <h3><span class="panel-num">伍</span>對話與預測</h3>
           <div class="panel-actions">
-            <button class="btn btn-outline btn-small" id="btn-new-predict">◆ 新預測</button>
-            <button class="btn btn-primary btn-small" id="btn-new-chat">✦ 新對話</button>
+            <button class="btn btn-primary btn-small" id="btn-new-chat">✦ 開新對話</button>
           </div>
         </div>
         <ul class="chat-list" id="chat-list"></ul>
       </div>
     </div>
+  </section>
+
+  <!-- 議事會視圖 -->
+  <section class="view view-chat" id="view-council" hidden>
+    <header class="chat-header">
+      <button class="btn btn-ghost btn-small" id="btn-council-back">← 返回</button>
+      <div class="chat-header-title">
+        <h2 id="council-name"></h2>
+        <span class="mode-chip emotional" id="council-members"></span>
+      </div>
+      <button class="btn btn-ghost btn-small" id="btn-council-delete">刪除</button>
+    </header>
+    <div class="messages" id="council-messages"></div>
+    <footer class="composer">
+      <textarea id="council-input" rows="2" placeholder="向在場的顧問們提問⋯(每位會依序回應,後者看得到前者)"></textarea>
+      <button class="btn btn-primary" id="btn-council-send">送出</button>
+    </footer>
   </section>
 
   <!-- 對話視圖 -->
@@ -297,7 +321,21 @@
 <!-- 新對話(含情境條件) -->
 <dialog id="modal-new-chat">
   <form method="dialog" class="modal-form" id="form-new-chat">
-    <h3 id="new-chat-title">新對話</h3>
+    <h3 id="new-chat-title">開新對話</h3>
+    <label>模式
+      <select id="new-chat-mode" class="select">
+        <optgroup label="一般">
+          <option value="chat">角色扮演對話</option>
+          <option value="predict">預測反應 / 決策</option>
+        </optgroup>
+        <optgroup label="感情處理(諮商技術)">
+          <option value="rehearse">排練難開口的對話</option>
+          <option value="letter">未寄出的信</option>
+          <option value="perspective">從對方的角度看</option>
+          <option value="reflect">反思陪伴(照見自己)</option>
+        </optgroup>
+      </select>
+    </label>
     <p class="hint" id="new-chat-hint"></p>
     <label>對話標題(選填)<input type="text" id="cond-title" placeholder="留空自動以時間命名"></label>
     <details class="cond-details" id="cond-details">
@@ -311,6 +349,20 @@
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" data-close>取消</button>
       <button type="submit" class="btn btn-primary">開始</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 建立議事會 -->
+<dialog id="modal-new-council">
+  <form method="dialog" class="modal-form" id="form-new-council">
+    <h3>召集議事會</h3>
+    <p class="hint">選 2 位以上已蒸餾的人物同場討論——他們會依序回應同一個問題,後發言者看得到前者說了什麼,可以附和或反駁。</p>
+    <label>標題(選填)<input type="text" id="council-title" placeholder="例:該不該接這個工作?"></label>
+    <div class="council-picker" id="council-picker"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" data-close>取消</button>
+      <button type="submit" class="btn btn-primary">召集</button>
     </div>
   </form>
 </dialog>

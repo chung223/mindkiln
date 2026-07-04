@@ -230,11 +230,13 @@ export function listChats(id) {
   return out;
 }
 
+const CHAT_MODE_SET = new Set(['chat', 'predict', 'rehearse', 'letter', 'perspective', 'reflect']);
+
 export function createChat(charId, { title, mode, conditions }) {
   const chat = {
     id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     title: title || new Date().toLocaleString('zh-TW'),
-    mode: mode === 'predict' ? 'predict' : 'chat',
+    mode: CHAT_MODE_SET.has(mode) ? mode : 'chat',
     conditions: conditions || {},
     messages: [],
     createdAt: new Date().toISOString(),
@@ -259,4 +261,64 @@ export function writeChat(charId, chat) {
 export function deleteChat(charId, chatId) {
   const p = path.join(chatsDir(charId), `${path.basename(chatId)}.json`);
   fs.rmSync(p, { force: true });
+}
+
+// ---------- 議事會 councils(跨人物,多個 persona 同場) ----------
+
+const COUNCILS_DIR = path.join(DATA_DIR, 'councils');
+
+function councilPath(id) {
+  return path.join(COUNCILS_DIR, `${path.basename(String(id))}.json`);
+}
+
+export function listCouncils() {
+  if (!fs.existsSync(COUNCILS_DIR)) return [];
+  const out = [];
+  for (const name of fs.readdirSync(COUNCILS_DIR)) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const c = JSON.parse(fs.readFileSync(path.join(COUNCILS_DIR, name), 'utf8'));
+      out.push({
+        id: c.id, title: c.title,
+        participants: c.participants,
+        messageCount: c.messages.length,
+        updatedAt: c.updatedAt,
+      });
+    } catch {
+      // 略過損毀檔
+    }
+  }
+  out.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  return out;
+}
+
+export function createCouncil({ title, participants }) {
+  if (!Array.isArray(participants) || participants.length < 2) {
+    throw new Error('議事會至少需要 2 位已蒸餾的人物');
+  }
+  fs.mkdirSync(COUNCILS_DIR, { recursive: true });
+  const council = {
+    id: `council-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title: title || `議事會 ${new Date().toLocaleString('zh-TW')}`,
+    participants, // [{ id, name }]
+    messages: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  writeCouncil(council);
+  return council;
+}
+
+export function getCouncil(id) {
+  return JSON.parse(fs.readFileSync(councilPath(id), 'utf8'));
+}
+
+export function writeCouncil(council) {
+  council.updatedAt = new Date().toISOString();
+  fs.mkdirSync(COUNCILS_DIR, { recursive: true });
+  atomicWrite(councilPath(council.id), JSON.stringify(council, null, 2));
+}
+
+export function deleteCouncil(id) {
+  fs.rmSync(councilPath(id), { force: true });
 }

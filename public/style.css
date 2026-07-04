@@ -138,6 +138,48 @@ body {
 
 @keyframes pulse { 50% { opacity: 0.3; } }
 
+/* 議事會 */
+.council-section { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 32vh; }
+.council-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: var(--gold);
+  padding: 0 2px;
+}
+.council-list { overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
+.council-card {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--jade);
+  border-radius: 9px;
+  background: var(--ink-2);
+  padding: 9px 12px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.council-card:hover { border-color: var(--jade); }
+.council-card.active { border-color: var(--jade); background: linear-gradient(135deg, rgba(123,162,116,0.12), var(--ink-2) 55%); }
+.council-card .cc-name { font-size: 13.5px; font-weight: 600; }
+.council-card .cc-meta { font-size: 11px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.council-picker { display: flex; flex-direction: column; gap: 7px; max-height: 40vh; overflow-y: auto; }
+/* 提高特異度以覆蓋 .modal-form label 的 flex-direction: column */
+.council-picker .council-pick-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ink-0);
+  cursor: pointer;
+  font-size: 14px;
+}
+.council-picker .council-pick-item input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--jade); }
+
 .sidebar-footer { border-top: 1px solid var(--line); padding-top: 12px; }
 
 /* 直排裝飾軌 */
@@ -415,6 +457,7 @@ body {
   white-space: nowrap;
 }
 .mode-chip.predict { border-color: var(--cinnabar-bright); color: var(--cinnabar-bright); }
+.mode-chip.emotional { border-color: var(--jade); color: var(--jade); }
 
 /* ============ 對話視圖 ============ */
 

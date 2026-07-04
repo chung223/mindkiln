@@ -10,7 +10,9 @@ import {
   listSourceFiles, deleteSourceFile, sourcesDir,
   readPersona, writePersona, listResearch, readResearch,
   listChats, createChat, getChat, deleteChat,
+  listCouncils, createCouncil, getCouncil, deleteCouncil,
 } from './store.js';
+import { handleCouncilMessage } from './council.js';
 import { startDistillation, regenerateDimension, getJob, getActiveJobForCharacter, subscribe, cancelJobsForCharacter } from './distill.js';
 import { handleMessage } from './chat.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
@@ -25,15 +27,17 @@ const PORT = process.env.PORT || 5723;
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
-// 同源防護：本機服務無驗證機制,阻擋其他網頁對 localhost 發出的跨站狀態變更請求
-const ALLOWED_ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
+// 同源防護：本機服務無驗證機制,阻擋其他網頁對本服務發出的跨站狀態變更請求。
+// 以請求本身的 Host 標頭比對來源,不寫死 localhost——這樣容器 / 區網 / 自訂埠部署也能通過。
 app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD') return next();
+  const reqHost = req.get('host'); // 例:127.0.0.1:5723 或 192.168.1.20:5723
   const origin = req.get('origin');
   const referer = req.get('referer');
-  let src = origin;
-  if (!src && referer) { try { src = new URL(referer).origin; } catch { src = null; } }
-  if (!src || !ALLOWED_ORIGINS.has(src)) {
+  let srcHost = null;
+  if (origin) { try { srcHost = new URL(origin).host; } catch { srcHost = null; } }
+  if (!srcHost && referer) { try { srcHost = new URL(referer).host; } catch { srcHost = null; } }
+  if (!reqHost || !srcHost || srcHost !== reqHost) {
     res.status(403).json({ error: '跨站請求已被阻擋' });
     return;
   }
@@ -306,6 +310,42 @@ app.delete('/api/characters/:id/chats/:chatId', wrap((req, res) => {
 
 app.post('/api/characters/:id/chats/:chatId/messages', wrap(handleMessage));
 
+// ---------- 議事會 Advisory Board ----------
+
+app.get('/api/councils', (req, res) => {
+  res.json(listCouncils());
+});
+
+app.post('/api/councils', wrap((req, res) => {
+  const { title, participantIds } = req.body || {};
+  const uniqueIds = Array.isArray(participantIds) ? [...new Set(participantIds)] : [];
+  if (uniqueIds.length < 2) {
+    res.status(400).json({ error: '議事會至少需要 2 位已蒸餾的人物' });
+    return;
+  }
+  const participants = [];
+  for (const id of uniqueIds) {
+    const c = getCharacter(id); // 不存在則 ENOENT → 404
+    if (!readPersona(id)) {
+      res.status(400).json({ error: `「${c.name}」尚未完成蒸餾,無法加入議事會` });
+      return;
+    }
+    participants.push({ id: c.id, name: c.name });
+  }
+  res.json(createCouncil({ title, participants }));
+}));
+
+app.get('/api/councils/:id', wrap((req, res) => {
+  res.json(getCouncil(req.params.id));
+}));
+
+app.delete('/api/councils/:id', wrap((req, res) => {
+  deleteCouncil(req.params.id);
+  res.json({ ok: true });
+}));
+
+app.post('/api/councils/:id/messages', wrap(handleCouncilMessage));
+
 // ---------- 啟動 ----------
 
 // 啟動清理:上次程序若在蒸餾中被中斷,character.json 會殘留 distilling 狀態
@@ -316,6 +356,8 @@ for (const c of listCharacters()) {
   }
 }
 
-app.listen(PORT, '127.0.0.1', () => {
+// 預設只綁 127.0.0.1(本機安全);容器/需對外時設 HOST=0.0.0.0
+const HOST = process.env.HOST || '127.0.0.1';
+app.listen(PORT, HOST, () => {
   console.log(`女媧工坊 running at http://localhost:${PORT}`);
 });
