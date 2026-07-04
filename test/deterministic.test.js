@@ -98,6 +98,57 @@ test('normalizeChatExport handles Chinese-meridiem iOS export + date changes', (
   assert.ok(out.includes('—— 2026/3/25 ——'), 'second date anchor kept (2026 not lost)');
 });
 
+// 空格分隔的 LINE 匯出變體:「HH:MM 發言者 訊息」,發言者名字可能含空格
+const LINE_SPACE = [
+  '2025.02.24 星期一',
+  '13:20 阿明 貼圖',
+  '13:21 阿明 早安 今天要開會嗎',
+  '13:25 小美 Amy 對啊 十點',
+  '13:26 阿明 好 我準備一下',
+  '13:30 小美 Amy 09-123-4567',
+  '14:02 阿明 收到',
+  '2025.02.25 星期二',
+  '09:00 小美 Amy 早安',
+  '09:01 阿明 早',
+].join('\n');
+
+test('looksLikeChatExport detects space-separated LINE variant', () => {
+  assert.equal(looksLikeChatExport(LINE_SPACE), true);
+});
+
+test('looksLikeChatExport does NOT misjudge timestamped non-chat prose', () => {
+  // 帶時間戳但非聊天:比例不足(混入散文)且無反覆出現的發言者 → 不應誤判
+  const schedule = [
+    '07:00 起床盥洗',
+    '08:30 通勤上班',
+    '09:00 晨會',
+    '今天的重點是把提案寫完,並且跟客戶確認時程。',
+    '中午和同事吃飯,聊到最近的專案很有收穫。',
+    '晚上早點休息,明天還要早起。',
+  ].join('\n');
+  assert.equal(looksLikeChatExport(schedule), false);
+  // 高比例時間戳但只有單一反覆 token(如系統通知)→ 不足以構成對話,不應誤判
+  const oneSpeaker = Array.from({ length: 8 }, (_, i) => `0${i}:00 通知 系統訊息${i}`).join('\n');
+  assert.equal(looksLikeChatExport(oneSpeaker), false);
+});
+
+test('normalizeChatExport parses space-separated LINE, binds multi-token names, keeps date anchors', () => {
+  const out = normalizeChatExport(LINE_SPACE);
+  assert.ok(out.includes('阿明: 早安 今天要開會嗎'), 'single-token speaker + message');
+  assert.ok(out.includes('小美 Amy: 對啊 十點'), 'two-token name bound, not leaked into message');
+  assert.ok(out.includes('小美 Amy: 09-123-4567'), 'two-token name kept across messages');
+  assert.ok(!out.includes('貼圖'), 'media placeholder dropped');
+  assert.ok(!/\d{1,2}:\d{2}/.test(out), 'per-message clock times removed');
+  assert.ok(out.includes('—— 2025/2/24 ——'), 'dot-separated date header anchored');
+  assert.ok(out.includes('—— 2025/2/25 ——'), 'second date anchor kept');
+});
+
+test('detectSpeakers picks up space-variant speakers after normalization', () => {
+  const names = detectSpeakers(normalizeChatExport(LINE_SPACE)).map((x) => x.name);
+  assert.ok(names.includes('阿明'), 'single-token speaker detected');
+  assert.ok(names.includes('小美 Amy'), 'multi-token speaker detected');
+});
+
 test('detectSpeakers tallies speaker frequencies', () => {
   const s = detectSpeakers(WHATSAPP);
   const byName = Object.fromEntries(s.map((x) => [x.name, x.count]));
