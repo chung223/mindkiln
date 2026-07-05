@@ -39,6 +39,7 @@
       <button class="btn btn-ghost btn-small" id="btn-new-council" title="多個人物同場討論">＋</button>
     </div>
     <nav class="council-list" id="council-list" aria-label="議事會列表"></nav>
+    <button class="btn btn-ghost btn-block btn-small" id="btn-simulate" title="兩個 persona 自動對談;同一人配不同時間切點=過去的他 × 現在的他">⚔ 對話模擬</button>
   </div>
 
   <footer class="sidebar-footer">
@@ -169,10 +170,12 @@
             <button class="btn btn-primary btn-small" id="btn-new-chat">✦ 開新對話</button>
             <button class="btn btn-ghost btn-small" id="btn-dashboard">關係儀表板</button>
             <button class="btn btn-ghost btn-small" id="btn-quotebook">語錄冊</button>
+            <button class="btn btn-ghost btn-small" id="btn-guess" title="從真實對話抽題:遮住他的回覆,你先猜,再揭曉他當年怎麼說">🎲 他會怎麼接</button>
             <button class="btn btn-ghost btn-small" id="btn-weekly" title="彙整近期對話、日誌與預測,寫一頁回顧(一次模型呼叫)">本週回顧</button>
             <button class="btn btn-ghost btn-small" id="btn-predictions">預測記錄</button>
           </div>
         </div>
+        <p class="daily-quote" id="daily-quote" hidden></p>
         <input type="search" class="chat-search" id="chat-search" placeholder="搜尋過往對話⋯">
         <ul class="chat-list" id="chat-list"></ul>
       </div>
@@ -229,6 +232,7 @@
       <div class="chat-header-title">
         <h2 id="dash-title">關係儀表板</h2>
       </div>
+      <button class="btn btn-ghost btn-small" id="btn-wrapped" title="年度回顧:一年的訊息曲線、開場比、深夜與年度語錄">📖 年鑑</button>
       <button class="btn btn-outline btn-small" id="btn-dash-arc" title="用模型判讀逐月互動基調與轉折點(一次呼叫,結果會保存)">✨ 生成情感弧線</button>
     </header>
     <div class="dash-body" id="dash-body"></div>
@@ -428,6 +432,73 @@
       <button type="submit" class="btn btn-primary">開始</button>
     </div>
   </form>
+</dialog>
+
+<!-- 她會怎麼接?(猜謎) -->
+<dialog id="modal-guess" class="modal-wide">
+  <div class="modal-form">
+    <h3 id="guess-title">他會怎麼接?
+      <span class="modal-head-actions">
+        <span class="guess-tally" id="guess-tally"></span>
+        <button class="btn btn-ghost btn-small modal-x" data-close>✕</button>
+      </span>
+    </h3>
+    <p class="hint">真實對話抽題:看脈絡,先猜他怎麼接,再揭曉<b>他當年真正說的話</b>。想的話也能讓 persona 答同一題,三方對照——這就是最真實的忠實度校準。</p>
+    <div class="guess-context" id="guess-context"></div>
+    <textarea id="guess-input" rows="2" placeholder="你猜他會怎麼接?(寫下來再揭曉,不寫用想的也行)"></textarea>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary btn-small" id="btn-guess-reveal">揭曉他的回答</button>
+      <button type="button" class="btn btn-ghost btn-small" id="btn-guess-persona" hidden>讓 persona 也答(1 次呼叫)</button>
+      <button type="button" class="btn btn-ghost btn-small" id="btn-guess-next">下一題</button>
+    </div>
+    <div class="guess-answers" id="guess-answers" hidden>
+      <div class="guess-card real"><div class="guess-k">他當年說的</div><div id="guess-real"></div></div>
+      <div class="guess-card mine" id="guess-mine-card" hidden><div class="guess-k">你的猜測</div><div id="guess-mine"></div></div>
+      <div class="guess-card ai" id="guess-ai-card" hidden><div class="guess-k">persona 的回答</div><div id="guess-ai"></div></div>
+    </div>
+    <div class="guess-score" id="guess-score" hidden>
+      你猜得⋯
+      <button class="btn btn-ghost btn-small" data-score="close">很接近</button>
+      <button class="btn btn-ghost btn-small" data-score="mid">有點像</button>
+      <button class="btn btn-ghost btn-small" data-score="far">差很遠</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- 對話模擬 -->
+<dialog id="modal-sim" class="modal-wide">
+  <div class="modal-form">
+    <h3>對話模擬<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <p class="hint">兩個 persona 自動對談,你在旁邊看。<b>選同一個人 + 不同時間切點 = 過去的他 × 現在的他</b>。這是模擬,不是預言——把它當一面會動的鏡子。</p>
+    <div class="sim-setup" id="sim-setup">
+      <div class="sim-side-row">
+        <label>甲<select id="sim-a" class="select"></select></label>
+        <label>時間切點(選填)<input type="text" id="sim-a-time" placeholder="例:2025/6/1"></label>
+      </div>
+      <div class="sim-side-row">
+        <label>乙<select id="sim-b" class="select"></select></label>
+        <label>時間切點(選填)<input type="text" id="sim-b-time" placeholder="留空=現在"></label>
+      </div>
+      <label>開場白(由甲說出)<textarea id="sim-opening" rows="2" placeholder="例:我一直想問你,那時候你在想什麼?"></textarea></label>
+      <div class="sim-side-row">
+        <label>輪數<select id="sim-turns" class="select"><option value="4">4</option><option value="6" selected>6</option><option value="8">8</option></select></label>
+        <button type="button" class="btn btn-primary" id="btn-sim-run">開始模擬</button>
+        <button type="button" class="btn btn-ghost btn-small" id="btn-sim-export" hidden>匯出 .md</button>
+      </div>
+    </div>
+    <div class="sim-stage" id="sim-stage"></div>
+  </div>
+</dialog>
+
+<!-- 關係年鑑 -->
+<dialog id="modal-wrapped" class="modal-wrapped-dialog">
+  <div class="wrapped-shell">
+    <div class="wrapped-top">
+      <select id="wrapped-year" class="select"></select>
+      <button class="btn btn-ghost btn-small modal-x" data-close>✕</button>
+    </div>
+    <div class="wrapped-scroll" id="wrapped-body"></div>
+  </div>
 </dialog>
 
 <!-- 語錄冊 -->

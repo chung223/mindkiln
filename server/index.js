@@ -25,6 +25,7 @@ import { computeAnalytics, computeEmotionalArc } from './analytics.js';
 import { startEvolution, readEvolutionState } from './evolve.js';
 import { verifyCharacterQuotes, buildQuotebook } from './quotes.js';
 import { handleWeeklyReview, readReviews } from './weekly.js';
+import { handleGuessItem, handleGuessPersona, handleDailyQuote, handleSimulate } from './game.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
 import { normalizeAliases, SUBJECT_TYPES, OUTPUT_LANGUAGES } from './store.js';
 import { detectSpeakersForCharacter, estimateDistillation } from './extract.js';
@@ -430,6 +431,12 @@ app.get('/api/characters/:id/weekly-reviews', wrap((req, res) => {
   getCharacter(req.params.id);
   res.json(readReviews(req.params.id));
 }));
+
+// 趣味包:猜謎(真實對話抽題)、今日一籤、雙 persona 對話模擬
+app.get('/api/characters/:id/guess-game', wrap(handleGuessItem));
+app.post('/api/characters/:id/guess-persona', wrap(handleGuessPersona));
+app.get('/api/characters/:id/daily-quote', wrap(handleDailyQuote));
+app.post('/api/simulate', wrap(handleSimulate));
 
 // 對話全文搜尋
 app.get('/api/characters/:id/chat-search', wrap((req, res) => {

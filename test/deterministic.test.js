@@ -260,3 +260,31 @@ test('verifyQuotes: verified with date anchor + source file, missing flagged, sh
   assert.equal(byQ['內耗'].status, 'skipped');
   assert.equal(byQ['其實我坦白這些不是要推開你的／停止內耗'].status, 'verified', '複合引語逐段驗證');
 });
+
+// ---------- game: 交換對抽取 / 確定性種子 ----------
+
+import { extractExchanges, seededIndex } from '../server/game.js';
+
+test('extractExchanges: subject reply after other, context collected, boundaries respected', () => {
+  const ev = [
+    { speaker: '阿明', text: '今天開會改到十點,你來得及嗎', date: '2025/3/1', media: false },
+    { speaker: '小美', text: '來得及呀 我連滾帶爬也會到的啦', date: '2025/3/1', media: false },
+    { fileBoundary: true },
+    { speaker: '小美', text: '這句沒有上文,不該成題目喔喔喔', date: '2025/3/2', media: false },
+  ];
+  const isSubject = (s) => s === '小美';
+  const items = extractExchanges(ev, isSubject);
+  assert.equal(items.length, 1, '跨檔交界不成題,無上文不成題');
+  assert.equal(items[0].answer.text, '來得及呀 我連滾帶爬也會到的啦');
+  assert.equal(items[0].context.length, 1);
+  assert.equal(items[0].context[0].self, false, '緊鄰上一句必須是對方');
+});
+
+test('seededIndex is deterministic and in range', () => {
+  assert.equal(seededIndex('2026-07-05|ruth', 100), seededIndex('2026-07-05|ruth', 100));
+  assert.notEqual(seededIndex('2026-07-05|ruth', 1000), seededIndex('2026-07-06|ruth', 1000));
+  for (const n of [1, 7, 1745]) {
+    const i = seededIndex('x', n);
+    assert.ok(i >= 0 && i < n);
+  }
+});

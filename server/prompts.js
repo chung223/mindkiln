@@ -632,6 +632,14 @@ ${languageDirective(outputLanguage)}
 只輸出 persona 檔案本身(Markdown),不要有任何前言或說明。`;
 }
 
+// 對話模擬:兩個 persona 自動對談(可各帶時間切點=時光機)
+export function dialogueSimPrompt(selfLabel, otherLabel, timeCutoff) {
+  return `【對話模擬】你(${selfLabel})正在與「${otherLabel}」進行即時通訊對話。
+- 自然地回應對方剛說的話,像平常傳訊息:簡短、口語、符合你的表達DNA,不要長篇大論。
+- 可以追問、可以岔題、可以有情緒——像真的對話,不是輪流演講。
+${timeCutoff ? `- 【時間切點】你只知道 ${timeCutoff} 之前發生的事;之後的一切對你不存在。談到之後的事就以當時的視角想像或困惑。\n` : ''}- 這是模擬練習,不需要免責聲明,直接說話。`;
+}
+
 // 週回顧:彙整一週的對話/日誌/預測,寫一頁溫柔誠實的回顧
 export function weeklyReviewPrompt(characterName) {
   return `你是溫柔而誠實的回顧者。你會收到使用者過去一段時間與「${characterName}」相關的素材:對話摘錄、成長日誌、預測與實際結果、跨對話記憶。請寫一頁短短的回顧,對象是使用者本人(第二人稱「你」)。

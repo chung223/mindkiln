@@ -220,6 +220,15 @@ async function openCharacter(id) {
     $('#incremental-hint').textContent = `偵測到新語料:${pending.join('、')}——增量更新只吃新檔,更新時間線與人物檔案,不必整條重蒸。`;
   }
 
+  // 今日一籤(從他的真實發言、以日期為種子確定性抽一句;沒聊天語料就不顯示)
+  const dq = $('#daily-quote');
+  dq.hidden = true;
+  api(`/api/characters/${encodeURIComponent(id)}/daily-quote`).then((r) => {
+    if (state.current?.id !== id) return;
+    dq.innerHTML = `🎐 今日一籤:「${esc(r.quote.text)}」<span class="dq-date">— ${esc(r.quote.date)}</span>`;
+    dq.hidden = false;
+  }).catch(() => {});
+
   const furnace = $('#furnace');
   furnace.hidden = true;
   $('#furnace-msg').textContent = '';
@@ -1402,6 +1411,212 @@ function bind() {
       $('#modal-evolution').showModal();
     } catch (err) { toast(err.message, true); }
   });
+
+  // 她會怎麼接?(真實對話猜謎)
+  let guessItem = null;
+  const guessKey = () => `nuwa-guess-${state.current?.id || ''}`;
+  const guessTally = () => {
+    let t;
+    try { t = JSON.parse(localStorage.getItem(guessKey())) || { n: 0, close: 0 }; } catch { t = { n: 0, close: 0 }; }
+    $('#guess-tally').textContent = t.n ? `${t.n} 題・接近 ${t.close}` : '';
+    return t;
+  };
+  const loadGuess = async () => {
+    guessItem = await api(`/api/characters/${encodeURIComponent(state.current.id)}/guess-game`);
+    $('#guess-title').firstChild.textContent = `${guessItem.name} 會怎麼接?`;
+    $('#guess-context').innerHTML = guessItem.context
+      .map((c) => `<div class="gc-msg ${c.self ? 'gc-self' : 'gc-other'}"><span class="gc-who">${esc(c.speaker)}</span>${esc(c.text)}</div>`)
+      .join('') + `<div class="gc-msg gc-self gc-hidden"><span class="gc-who">${esc(guessItem.name)}</span>???</div>`;
+    $('#guess-input').value = '';
+    $('#guess-answers').hidden = true;
+    $('#guess-score').hidden = true;
+    $('#btn-guess-persona').hidden = true;
+    $('#guess-mine-card').hidden = true;
+    $('#guess-ai-card').hidden = true;
+    $('#btn-guess-reveal').disabled = false;
+  };
+  $('#btn-guess').addEventListener('click', async () => {
+    try { await loadGuess(); guessTally(); $('#modal-guess').showModal(); }
+    catch (err) { toast(err.message, true); }
+  });
+  $('#btn-guess-next').addEventListener('click', () => loadGuess().catch((e) => toast(e.message, true)));
+  $('#btn-guess-reveal').addEventListener('click', () => {
+    if (!guessItem) return;
+    $('#guess-real').innerHTML = `${esc(guessItem.answer.text)}<div class="gc-date">${esc(guessItem.answer.date || '')}</div>`;
+    const mine = $('#guess-input').value.trim();
+    if (mine) { $('#guess-mine').textContent = mine; $('#guess-mine-card').hidden = false; }
+    $('#guess-answers').hidden = false;
+    $('#guess-score').hidden = false;
+    $('#btn-guess-persona').hidden = false;
+    $('#btn-guess-reveal').disabled = true;
+  });
+  $('#guess-score').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-score]');
+    if (!b) return;
+    const t = guessTally();
+    t.n++;
+    if (b.dataset.score === 'close') t.close++;
+    localStorage.setItem(guessKey(), JSON.stringify(t));
+    guessTally();
+    $('#guess-score').hidden = true;
+  });
+  $('#btn-guess-persona').addEventListener('click', async () => {
+    const btn = $('#btn-guess-persona');
+    btn.disabled = true;
+    try {
+      const { reply } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/guess-persona`, {
+        method: 'POST', body: { context: guessItem.context },
+      });
+      $('#guess-ai').innerHTML = renderMd(reply);
+      $('#guess-ai-card').hidden = false;
+    } catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; }
+  });
+
+  // 對話模擬(雙 persona;同一人+不同時間切點=時光機)
+  let simCtrl = null;
+  let simTranscript = [];
+  $('#btn-simulate').addEventListener('click', async () => {
+    try {
+      const chars = (await api('/api/characters')).filter((c) => c.hasPersona);
+      if (!chars.length) { toast('至少要有一位已蒸餾的人物', true); return; }
+      const opts = chars.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+      $('#sim-a').innerHTML = opts;
+      $('#sim-b').innerHTML = opts;
+      if (chars.length > 1) $('#sim-b').selectedIndex = 1;
+      $('#sim-stage').innerHTML = '';
+      $('#btn-sim-export').hidden = true;
+      $('#modal-sim').showModal();
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#modal-sim').addEventListener('close', () => { simCtrl?.abort(); simCtrl = null; });
+  $('#btn-sim-run').addEventListener('click', async () => {
+    const opening = $('#sim-opening').value.trim();
+    if (!opening) { toast('要給一句開場白', true); return; }
+    const turns = Number($('#sim-turns').value);
+    if (!confirm(`開始模擬?${turns} 輪 = ${turns} 次模型呼叫。`)) return;
+    const stage = $('#sim-stage');
+    stage.innerHTML = '';
+    simTranscript = [];
+    $('#btn-sim-run').disabled = true;
+    $('#btn-sim-export').hidden = true;
+    const ctrl = new AbortController();
+    simCtrl = ctrl;
+    const bubbles = {};
+    const names = {};
+    const addMsg = (side, name, text) => {
+      const div = document.createElement('div');
+      div.className = `sim-msg sim-${side}`;
+      div.innerHTML = `<div class="sim-who">${esc(name)}</div><div class="sim-bubble md-body">${renderMd(text)}</div>`;
+      stage.appendChild(div);
+      stage.scrollTop = stage.scrollHeight;
+      return div.querySelector('.sim-bubble');
+    };
+    try {
+      const res = await fetch('/api/simulate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+        body: JSON.stringify({
+          aId: $('#sim-a').value, bId: $('#sim-b').value, opening, turns,
+          aTime: $('#sim-a-time').value.trim(), bTime: $('#sim-b-time').value.trim(),
+        }),
+      });
+      const ctype = res.headers.get('content-type') || '';
+      if (!res.ok || !ctype.includes('text/event-stream')) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `請求失敗（${res.status}）`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      const acc = {};
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let event = 'message', data = '';
+          for (const l of raw.split('\n')) {
+            if (l.startsWith('event: ')) event = l.slice(7).trim();
+            else if (l.startsWith('data: ')) data += l.slice(6);
+          }
+          if (!data) continue;
+          let p;
+          try { p = JSON.parse(data); } catch { continue; }
+          if (event === 'sim_msg') {
+            names[p.side] = p.name;
+            addMsg(p.side, p.name, p.text);
+            simTranscript.push({ name: p.name, text: p.text });
+          } else if (event === 'sim_start') {
+            names[p.side] = p.name;
+            acc[p.side] = '';
+            bubbles[p.side] = addMsg(p.side, p.name, '');
+          } else if (event === 'delta' && bubbles[p.side]) {
+            acc[p.side] += p.text;
+            bubbles[p.side].innerHTML = renderMd(acc[p.side]);
+            stage.scrollTop = stage.scrollHeight;
+          } else if (event === 'sim_done') {
+            simTranscript.push({ name: names[p.side], text: acc[p.side] || '' });
+          } else if (event === 'error') {
+            throw new Error(p.message || '發生錯誤');
+          }
+        }
+      }
+      $('#btn-sim-export').hidden = simTranscript.length < 2;
+    } catch (err) {
+      if (err.name !== 'AbortError') toast(err.message, true);
+    } finally {
+      if (simCtrl === ctrl) simCtrl = null;
+      $('#btn-sim-run').disabled = false;
+    }
+  });
+  $('#btn-sim-export').addEventListener('click', () => {
+    const lines = [`# 對話模擬 ${new Date().toLocaleString('zh-TW')}`, ''];
+    for (const m of simTranscript) lines.push(`**${m.name}**:`, m.text, '');
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '對話模擬.md';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  // 關係年鑑(Wrapped)
+  const renderWrapped = (y) => {
+    const d = state.dash;
+    const months = d.months.filter((m) => m.ym.startsWith(y));
+    const tot = months.reduce((s, m) => ({ a: s.a + m.subject, b: s.b + m.other }), { a: 0, b: 0 });
+    const hottest = months.slice().sort((x, z) => (z.subject + z.other) - (x.subject + x.other))[0];
+    const arcMonths = (d.arc?.months || []).filter((m) => m.ym.startsWith(y));
+    const yearQuotes = (quotebookData?.months || [])
+      .filter((m) => m.ym.startsWith(y))
+      .flatMap((m) => m.quotes)
+      .sort((a, b) => b.text.length - a.text.length)
+      .slice(0, 8);
+    const S = esc(d.subjectLabel), O = esc(d.otherLabel);
+    $('#wrapped-body').innerHTML = `
+      <section class="wrapped-sec"><div class="w-kicker">${y}</div><div class="w-big">${S} × ${O}</div><div class="w-sub">這一年,你們留下了這些字。往下捲。</div></section>
+      <section class="wrapped-sec"><div class="w-kicker">訊息總數</div><div class="w-big">${(tot.a + tot.b).toLocaleString()}</div><div class="w-sub">${S} ${tot.a.toLocaleString()}|${O} ${tot.b.toLocaleString()}</div></section>
+      ${hottest ? `<section class="wrapped-sec"><div class="w-kicker">聊得最兇的月份</div><div class="w-big">${esc(hottest.ym)}</div><div class="w-sub">${(hottest.subject + hottest.other).toLocaleString()} 則訊息</div></section>` : ''}
+      <section class="wrapped-sec"><div class="w-kicker">這一年的形狀</div><div class="dash-scroll">${dashBars(months.map((m) => ({ label: m.ym.slice(5), a: m.subject, b: m.other })))}</div><div class="w-sub"><span class="dash-key"><i style="background:${DASH_C_SUBJECT}"></i>${S}</span> <span class="dash-key"><i style="background:${DASH_C_OTHER}"></i>${O}</span></div></section>
+      ${arcMonths.length ? `<section class="wrapped-sec"><div class="w-kicker">情感弧線</div>${dashArcLine(arcMonths)}</section>` : ''}
+      ${yearQuotes.length ? `<section class="wrapped-sec"><div class="w-kicker">年度語錄</div><div class="w-quotes">${yearQuotes.map((q) => `<div class="w-quote">「${esc(q.text.slice(0, 80))}」<span class="dq-date">${esc(q.date)}</span></div>`).join('')}</div></section>` : ''}
+      <section class="wrapped-sec"><div class="w-big">🎐</div><div class="w-sub">紀錄是紀錄,人在紀錄之外。<br>明年見。</div></section>`;
+  };
+  $('#btn-wrapped').addEventListener('click', async () => {
+    try {
+      if (!state.dash) return;
+      quotebookData = await api(`/api/characters/${encodeURIComponent(state.current.id)}/quotebook`); // 換人物不可用舊快取
+      const years = [...new Set(state.dash.months.map((m) => m.ym.slice(0, 4)))].sort().reverse();
+      $('#wrapped-year').innerHTML = years.map((yy) => `<option value="${yy}">${yy} 年</option>`).join('');
+      renderWrapped(years[0]);
+      $('#modal-wrapped').showModal();
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#wrapped-year').addEventListener('change', () => renderWrapped($('#wrapped-year').value));
 
   // 語音對話模式(免手打迴圈)
   $('#btn-voice-mode').addEventListener('click', () => {
