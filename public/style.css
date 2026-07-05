@@ -1035,3 +1035,21 @@ dialog::backdrop { background: rgba(10, 8, 6, 0.72); backdrop-filter: blur(3px);
 .evo-round { border-left: 3px solid var(--line); padding: 6px 12px; margin: 6px 0; font-size: 13.5px; }
 .evo-round.kept { border-left-color: var(--jade); }
 .evo-round.reverted { border-left-color: var(--cinnabar-bright); opacity: 0.8; }
+
+/* ============ 引語驗證 / 語錄冊 / 週回顧 / 語音對話 ============ */
+
+.q-ok { background: rgba(123, 162, 116, 0.16); border-radius: 3px; padding: 0 2px; }
+.q-bad {
+  background: rgba(224, 90, 56, 0.22);
+  border-radius: 3px;
+  padding: 0 2px;
+  text-decoration: underline wavy var(--cinnabar-bright) 1px;
+}
+.quotebook-body { max-height: 58vh; overflow-y: auto; }
+.qb-month h4 { margin: 14px 0 6px; color: var(--gold); letter-spacing: 1px; display: flex; align-items: baseline; gap: 10px; }
+.qb-count { font-size: 11px; opacity: 0.5; font-weight: normal; }
+.qb-quote { padding: 5px 10px; border-left: 2px solid var(--line); margin: 3px 0; font-size: 14px; line-height: 1.65; cursor: copy; }
+.qb-quote:hover { border-left-color: var(--jade); background: rgba(123, 162, 116, 0.06); }
+.qb-date { font-size: 11px; opacity: 0.45; margin-right: 8px; }
+.weekly-item { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 10px; }
+#btn-voice-mode.voice-on { color: var(--jade); border-color: var(--jade); }

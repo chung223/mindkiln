@@ -10,6 +10,8 @@ import {
 import {
   chatSystemBlocks, probeGenPrompt, personaScorecardPrompt, personaEvolvePrompt,
 } from './prompts.js';
+import { verifyQuotes } from './quotes.js';
+import { loadCorpus, corpusToPrompt } from './extract.js';
 
 // persona 演化(達爾文迴圈):評分 → 只改最弱維度 → 複評 → 分數有進步才保留,否則回滾。
 // 三個角色(出題者/評分者/改寫者)各用獨立提示詞,防「自己改自己評」的分數通膨。
@@ -99,15 +101,23 @@ async function runProbes(character, personaText, probes, checkCancelled) {
   return probes.map((p, i) => ({ ...p, answer: answers[i] }));
 }
 
-async function scorePersona(character, personaText, probeRuns, bundle, missedBlock) {
+async function scorePersona(character, personaText, probeRuns, bundle, missedBlock, corpusRaw) {
   const transcript = probeRuns
     .map((p, i) => `## 探針 ${i + 1}\n問:${p.q}\n檢查要點:${p.expect}\npersona 的回答:\n${p.answer}`)
     .join('\n\n');
+  // 確定性引語稽核(程式比對原始語料,非模型判斷)——quoteFidelity 以此為錨,杜絕評分者用猜的
+  let auditBlock = '';
+  if (corpusRaw) {
+    const audit = verifyQuotes(corpusRaw, personaText);
+    const missing = audit.filter((a) => a.status === 'missing').map((a) => a.quote);
+    const verified = audit.filter((a) => a.status === 'verified').length;
+    auditBlock = `\n\n【確定性引語稽核(程式逐句比對原始語料,絕對可信)】\npersona 中可查核引語 ${verified + missing.length} 句:可溯源 ${verified} 句、查無 ${missing.length} 句。${missing.length ? `\n查無出處清單:\n${missing.map((q) => `- 「${q}」`).join('\n')}` : ''}\nquoteFidelity 評分規則:查無清單可能混有「分析者的標籤/規則文字」(如心智模型名稱、句式描述)——那些不算編造。你只把清單中「以此人口吻陳述的完整話語」計為編造引語:有任何一句 → 此維不得超過 40;一句都沒有 → 此維不得低於 70(可溯源部分已程式驗證,不要憑感覺扣分)。`;
+  }
   const r = await streamChat({
     system: [{ type: 'text', text: personaScorecardPrompt(character.name) }],
     messages: [{
       role: 'user',
-      content: `【persona 檔案】\n${personaText}\n\n【調研檔案】\n${bundle}\n\n【探針測試逐字稿】\n${transcript}${missedBlock}\n\n請嚴格評分,只輸出 JSON。`,
+      content: `【persona 檔案】\n${personaText}\n\n【調研檔案】\n${bundle}\n\n【探針測試逐字稿】\n${transcript}${auditBlock}${missedBlock}\n\n請嚴格評分,只輸出 JSON。`,
     }],
     maxTokens: 3000,
   });
@@ -154,6 +164,9 @@ async function runEvolution(job, characterId, mode) {
     const bundle = researchBundle(characterId);
     if (!bundle.trim()) throw Object.assign(new Error('找不到調研檔案——評分需要對照調研證據。'), { status: 400 });
     const missedBlock = missedPredictionsBlock(characterId);
+    // 原始語料(供確定性引語稽核;載入失敗不阻擋,只是評分退回模型判斷)
+    let corpusRaw = '';
+    try { corpusRaw = corpusToPrompt(await loadCorpus(characterId)); } catch { corpusRaw = ''; }
 
     // 1) 探針(快取:沒有才生成)
     emit(job, 'phase', { phase: 'corpus', label: '準備探針測試' });
@@ -180,7 +193,7 @@ async function runEvolution(job, characterId, mode) {
     emit(job, 'phase', { phase: 'research', label: `探針測試(${probes.length} 題)` });
     const beforeRuns = await runProbes(character, persona, probes, checkCancelled);
     emit(job, 'phase', { phase: 'quality', label: '獨立評分' });
-    const before = await scorePersona(character, persona, beforeRuns, bundle, missedBlock);
+    const before = await scorePersona(character, persona, beforeRuns, bundle, missedBlock, corpusRaw);
     checkCancelled();
     fs.writeFileSync(scorecardPath(characterId), JSON.stringify({ at: new Date().toISOString(), ...before }, null, 2));
     emit(job, 'scorecard', { stage: 'before', ...before });
@@ -210,7 +223,7 @@ async function runEvolution(job, characterId, mode) {
     emit(job, 'phase', { phase: 'research', label: '複測探針' });
     const afterRuns = await runProbes(character, candidate, probes, checkCancelled);
     emit(job, 'phase', { phase: 'quality', label: '複評與棘輪裁決' });
-    const after = await scorePersona(character, candidate, afterRuns, bundle, missedBlock);
+    const after = await scorePersona(character, candidate, afterRuns, bundle, missedBlock, corpusRaw);
     checkCancelled();
 
     const kept = after.total >= before.total + RATCHET_THRESHOLD;

@@ -226,3 +226,37 @@ test('scanInjection flags prompt-injection patterns, passes clean persona', () =
   const clean = '# 某人 · 思維作業系統\n\n> 「真誠是最高級的策略。」\n\n## 表達DNA\n- 短句、自嘲、溫柔';
   assert.equal(scanInjection(clean).length, 0);
 });
+
+// ---------- quotes: 確定性引語驗證 ----------
+
+import { normalizeForMatch, extractQuotes, verifyQuotes } from '../server/quotes.js';
+
+test('normalizeForMatch strips punctuation/whitespace, keeps substance', () => {
+  assert.equal(normalizeForMatch('大破,才能大立呀!'), normalizeForMatch('大破才能大立呀'));
+  assert.equal(normalizeForMatch('「連滾帶爬」…'), '連滾帶爬');
+});
+
+test('extractQuotes pulls unique 「」 quotes', () => {
+  const qs = extractQuotes('她說「大破才能大立呀」,又說「大破才能大立呀」和「內耗退散」。');
+  assert.deepEqual(qs, ['大破才能大立呀', '內耗退散']);
+});
+
+test('verifyQuotes: verified with date anchor + source file, missing flagged, short skipped', () => {
+  const corpus = [
+    '<document filename="chat.txt">',
+    '—— 2026/6/19 ——',
+    '小美: 其實我坦白這些,不是要推開你的。俗話說,大破才能大立呀',
+    '—— 2026/6/20 ——',
+    '小美: 停止內耗',
+    '</document>',
+  ].join('\n');
+  const md = '證據:「大破才能大立呀」;假的:「時間會沖淡一切的證明」;短:「內耗」;複合:「其實我坦白這些不是要推開你的／停止內耗」';
+  const r = verifyQuotes(corpus, md);
+  const byQ = Object.fromEntries(r.map((x) => [x.quote, x]));
+  assert.equal(byQ['大破才能大立呀'].status, 'verified');
+  assert.equal(byQ['大破才能大立呀'].date, '2026/6/19', '定位到日期錨點');
+  assert.equal(byQ['大破才能大立呀'].sourceFile, 'chat.txt');
+  assert.equal(byQ['時間會沖淡一切的證明'].status, 'missing', '捏造引語被抓出');
+  assert.equal(byQ['內耗'].status, 'skipped');
+  assert.equal(byQ['其實我坦白這些不是要推開你的／停止內耗'].status, 'verified', '複合引語逐段驗證');
+});

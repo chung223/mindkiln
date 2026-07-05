@@ -168,6 +168,8 @@
           <div class="panel-actions">
             <button class="btn btn-primary btn-small" id="btn-new-chat">✦ 開新對話</button>
             <button class="btn btn-ghost btn-small" id="btn-dashboard">關係儀表板</button>
+            <button class="btn btn-ghost btn-small" id="btn-quotebook">語錄冊</button>
+            <button class="btn btn-ghost btn-small" id="btn-weekly" title="彙整近期對話、日誌與預測,寫一頁回顧(一次模型呼叫)">本週回顧</button>
             <button class="btn btn-ghost btn-small" id="btn-predictions">預測記錄</button>
           </div>
         </div>
@@ -205,6 +207,7 @@
       <button class="btn btn-ghost btn-small" id="btn-save-prediction" hidden title="把這則預測記下來,事後回填實際結果">存為預測</button>
       <button class="btn btn-ghost btn-small" id="btn-remember" title="把這段對話裡值得長期記住的事,存進此人物的跨對話記憶">更新記憶</button>
       <button class="btn btn-ghost btn-small" id="btn-review" hidden>結束並檢討</button>
+      <button class="btn btn-ghost btn-small" id="btn-voice-mode" hidden title="語音對話:回覆自動朗讀,唸完自動開麥,講完自動送出">🔈 語音對話</button>
       <button class="btn btn-ghost btn-small" id="btn-journal-here" title="記一筆這次對話帶給你的收穫">✍ 日誌</button>
       <button class="btn btn-ghost btn-small" id="btn-export-chat" title="把整段對話匯出成 Markdown">匯出</button>
       <button class="btn btn-ghost btn-small" id="btn-show-conditions">情境條件</button>
@@ -427,6 +430,30 @@
   </form>
 </dialog>
 
+<!-- 語錄冊 -->
+<dialog id="modal-quotebook" class="modal-wide">
+  <div class="modal-form">
+    <h3 id="quotebook-title">語錄冊<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <p class="hint">直接取自原始語料的<b>本人真實發言</b>(按月分組)——每一句天生可溯源,點一下複製。</p>
+    <input type="search" class="chat-search" id="quotebook-search" placeholder="搜尋語錄⋯">
+    <div class="quotebook-body" id="quotebook-body"></div>
+  </div>
+</dialog>
+
+<!-- 週回顧 -->
+<dialog id="modal-weekly" class="modal-wide">
+  <div class="modal-form">
+    <h3>本週回顧
+      <span class="modal-head-actions">
+        <button class="btn btn-outline btn-small" id="btn-weekly-run">✨ 生成這週的回顧</button>
+        <button class="btn btn-ghost btn-small modal-x" data-close>✕</button>
+      </span>
+    </h3>
+    <div class="md-body review-body" id="weekly-body"></div>
+    <details id="weekly-history-wrap"><summary>過往回顧</summary><div id="weekly-history"></div></details>
+  </div>
+</dialog>
+
 <!-- persona 演化(評分卡 + 紀錄) -->
 <dialog id="modal-evolution" class="modal-wide">
   <div class="modal-form">
@@ -559,6 +586,7 @@
   <div class="modal-form">
     <h3>persona.md
       <span class="modal-head-actions">
+        <button class="btn btn-ghost btn-small" id="btn-quote-verify" title="每句「引語」確定性回查原始語料(純比對,零模型成本),紅綠標示">✓ 驗證引語</button>
         <button class="btn btn-ghost btn-small" id="btn-persona-copy" title="複製成可貼進 Claude / ChatGPT 的系統提示詞">複製為提示詞</button>
         <button class="btn btn-ghost btn-small" id="btn-persona-download" title="下載 persona.md,可分享或備份">下載 .md</button>
         <button class="btn btn-ghost btn-small" id="btn-persona-versions" title="檢視 / 回溯歷史版本">版本歷史</button>

@@ -1,0 +1,24 @@
+# Render 一鍵部署藍圖:https://render.com/deploy?repo=https://github.com/chung223/mindkiln
+# 注意:需要付費方案才能掛持久磁碟(免費層重啟即清空資料)。
+# NUWA_PASSWORD 部署時必填——雲端實例沒有密碼等於把你的金鑰與資料開給全世界。
+services:
+  - type: web
+    name: mindkiln
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: NUWA_DATA_DIR
+        value: /data
+      - key: NUWA_PASSWORD
+        sync: false # 部署時要求填入(必填:保護你的金鑰與資料)
+      - key: ANTHROPIC_API_KEY
+        sync: false # 選填:也可部署後在介面設定填
+    disk:
+      name: nuwa-data
+      mountPath: /data
+      sizeGB: 1

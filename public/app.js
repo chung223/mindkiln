@@ -818,8 +818,11 @@ function renderConditionsBanner(cond) {
 const TTS_OK = typeof window !== 'undefined' && 'speechSynthesis' in window;
 const SR_CLASS = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
-function speak(text) {
-  if (!TTS_OK || !text || !text.trim()) return;
+let voiceMode = false;        // 語音對話模式(回覆自動朗讀 → 唸完自動開麥 → 講完自動送出)
+let voiceStartMic = null;     // 由 setupVoice 填入:開始收音
+
+function speak(text, onend) {
+  if (!TTS_OK || !text || !text.trim()) { onend?.(); return; }
   window.speechSynthesis.cancel(); // 先停掉上一段
   const u = new SpeechSynthesisUtterance(text.slice(0, 4000));
   u.lang = 'zh-TW';
@@ -827,6 +830,7 @@ function speak(text) {
   const zh = voices.find((v) => /zh[-_]?TW|Taiwan/i.test(v.lang) || /國語|中文|Taiwan/i.test(v.name))
     || voices.find((v) => /^zh/i.test(v.lang));
   if (zh) u.voice = zh;
+  if (onend) u.onend = onend;
   window.speechSynthesis.speak(u);
 }
 
@@ -861,16 +865,27 @@ function setupVoice() {
     $('#composer-input').value = base + final + interim;
   };
   const stop = () => { recognizing = false; mic.classList.remove('recording'); };
-  recog.onend = stop;
-  recog.onerror = stop;
-  mic.addEventListener('click', () => {
-    if (recognizing) { recog.stop(); return; }
+  const begin = () => {
+    if (recognizing) return;
     const cur = $('#composer-input').value;
     base = cur ? cur + ' ' : '';
     recognizing = true;
     mic.classList.add('recording');
     try { recog.start(); } catch { stop(); }
+  };
+  voiceStartMic = begin;
+  recog.onend = () => {
+    stop();
+    // 語音對話模式:講完自動送出
+    if (voiceMode && state.chat && $('#composer-input').value.trim() && !state.sending) sendMessage();
+  };
+  recog.onerror = stop;
+  mic.addEventListener('click', () => {
+    if (recognizing) { recog.stop(); return; }
+    begin();
   });
+  // 兩者皆支援才提供「語音對話」開關
+  if (TTS_OK) $('#btn-voice-mode').hidden = false;
 }
 
 function appendMessage(role, content, streaming = false) {
@@ -987,6 +1002,10 @@ async function sendMessage() {
     } else {
       chat.messages.push({ role: 'user', content });
       chat.messages.push({ role: 'assistant', content: acc, ...(coachText ? { coach: coachText } : {}) });
+      // 語音對話:回覆自動朗讀,唸完自動開麥(免手打迴圈)
+      if (voiceMode && chat === state.chat && acc) {
+        speak(acc, () => { if (voiceMode && chat === state.chat) voiceStartMic?.(); });
+      }
     }
   } catch (err) {
     bubble.classList.remove('streaming');
@@ -1382,6 +1401,109 @@ function bind() {
       $('#evolution-body').innerHTML = html;
       $('#modal-evolution').showModal();
     } catch (err) { toast(err.message, true); }
+  });
+
+  // 語音對話模式(免手打迴圈)
+  $('#btn-voice-mode').addEventListener('click', () => {
+    voiceMode = !voiceMode;
+    $('#btn-voice-mode').classList.toggle('voice-on', voiceMode);
+    if (!voiceMode && TTS_OK) window.speechSynthesis.cancel();
+    toast(voiceMode ? '語音對話開啟:回覆自動朗讀,唸完自動開麥、講完自動送出' : '語音對話關閉');
+  });
+
+  // 引語驗證(確定性):persona 檢視頁紅綠標示
+  $('#btn-quote-verify').addEventListener('click', async () => {
+    const btn = $('#btn-quote-verify');
+    btn.disabled = true;
+    try {
+      const data = await api(`/api/characters/${encodeURIComponent(state.current.id)}/quote-verify`);
+      const p = data.results.find((r) => r.target === 'persona.md');
+      if (p) {
+        let html = $('#persona-body').innerHTML;
+        for (const q of p.quotes) {
+          if (q.status === 'skipped') continue;
+          const needle = `「${esc(q.quote)}」`;
+          const cls = q.status === 'verified' ? 'q-ok' : 'q-bad';
+          const title = q.status === 'verified'
+            ? `可溯源${q.date ? `・${q.date}` : ''}${q.sourceFile ? `・${q.sourceFile}` : ''}`
+            : '⚠ 原始語料查無此句';
+          html = html.split(needle).join(`「<span class="${cls}" title="${esc(title)}">${esc(q.quote)}</span>」`);
+        }
+        $('#persona-body').innerHTML = html;
+      }
+      const t = data.total;
+      const researchMissing = data.results.filter((r) => r.target !== 'persona.md' && r.missing)
+        .map((r) => `${r.target}:${r.missing} 句`);
+      toast(`引語驗證:可溯源 ${t.verified}、查無 ${t.missing}(綠=有出處,紅=查無)${researchMissing.length ? `|調研檔查無:${researchMissing.join('、')}` : ''}`, t.missing > 0);
+      if (t.missing) console.warn('查無出處的引語:', data.results.flatMap((r) => r.quotes.filter((q) => q.status === 'missing').map((q) => `[${r.target}]「${q.quote}」`)));
+    } catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; }
+  });
+
+  // 語錄冊
+  let quotebookData = null;
+  const renderQuotebook = (filter) => {
+    const box = $('#quotebook-body');
+    const f = (filter || '').trim();
+    box.innerHTML = '';
+    let shown = 0;
+    for (const m of quotebookData.months) {
+      const hits = f ? m.quotes.filter((q) => q.text.includes(f)) : m.quotes;
+      if (!hits.length) continue;
+      const sec = document.createElement('div');
+      sec.className = 'qb-month';
+      sec.innerHTML = `<h4>${esc(m.ym)}<span class="qb-count">${hits.length} 句</span></h4>`
+        + hits.map((q) => `<div class="qb-quote" data-t="${esc(q.text)}"><span class="qb-date">${esc(q.date)}</span>${esc(q.text)}</div>`).join('');
+      box.appendChild(sec);
+      shown += hits.length;
+    }
+    if (!shown) box.innerHTML = '<p class="muted">沒有符合的語錄。</p>';
+  };
+  $('#btn-quotebook').addEventListener('click', async () => {
+    try {
+      $('#quotebook-search').value = '';
+      quotebookData = await api(`/api/characters/${encodeURIComponent(state.current.id)}/quotebook`);
+      $('#quotebook-title').firstChild.textContent = `語錄冊 · ${quotebookData.name}(${quotebookData.count} 句)`;
+      renderQuotebook('');
+      $('#modal-quotebook').showModal();
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#quotebook-search').addEventListener('input', () => renderQuotebook($('#quotebook-search').value));
+  $('#quotebook-body').addEventListener('click', async (e) => {
+    const q = e.target.closest('.qb-quote');
+    if (!q) return;
+    try { await navigator.clipboard.writeText(q.dataset.t); toast('已複製'); } catch { /* 忽略 */ }
+  });
+
+  // 週回顧
+  const renderWeeklyHistory = (reviews) => {
+    $('#weekly-history').innerHTML = reviews.length
+      ? reviews.map((r) => `<div class="weekly-item"><div class="journal-meta">${esc(new Date(r.at).toLocaleString('zh-TW'))}(近 ${r.days} 天)</div><div class="md-body">${renderMd(r.content)}</div></div>`).join('')
+      : '<p class="muted">還沒有過往回顧。</p>';
+  };
+  $('#btn-weekly').addEventListener('click', async () => {
+    try {
+      const reviews = await api(`/api/characters/${encodeURIComponent(state.current.id)}/weekly-reviews`);
+      $('#weekly-body').innerHTML = reviews.length
+        ? renderMd(reviews[0].content)
+        : '<p class="muted">還沒有回顧。按右上「✨ 生成這週的回顧」——會彙整近 7 天的對話、日誌與預測(一次模型呼叫)。</p>';
+      renderWeeklyHistory(reviews.slice(1));
+      $('#modal-weekly').showModal();
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#btn-weekly-run').addEventListener('click', async () => {
+    const btn = $('#btn-weekly-run');
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = '回顧中⋯';
+    try {
+      const { content } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/weekly-review`, {
+        method: 'POST', body: { days: 7 },
+      });
+      $('#weekly-body').innerHTML = renderMd(content);
+      toast('本週回顧已生成並保存');
+    } catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; btn.textContent = orig; }
   });
 
   // 語料增量更新

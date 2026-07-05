@@ -23,6 +23,8 @@ import { handleMessage, handleSessionReview, handleMemoryUpdate, handleABPreview
 import { handleImport } from './import.js';
 import { computeAnalytics, computeEmotionalArc } from './analytics.js';
 import { startEvolution, readEvolutionState } from './evolve.js';
+import { verifyCharacterQuotes, buildQuotebook } from './quotes.js';
+import { handleWeeklyReview, readReviews } from './weekly.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
 import { normalizeAliases, SUBJECT_TYPES, OUTPUT_LANGUAGES } from './store.js';
 import { detectSpeakersForCharacter, estimateDistillation } from './extract.js';
@@ -410,6 +412,23 @@ app.post('/api/characters/:id/evolve', wrap((req, res) => {
 app.get('/api/characters/:id/evolution', wrap((req, res) => {
   getCharacter(req.params.id);
   res.json(readEvolutionState(req.params.id));
+}));
+
+// 引語驗證(確定性,零模型成本):persona + 調研檔的每句引語回查原始語料
+app.get('/api/characters/:id/quote-verify', wrap(async (req, res) => {
+  res.json(await verifyCharacterQuotes(req.params.id));
+}));
+
+// 語錄冊:此人物在原始語料中的真實發言(按月分組,天生可溯源)
+app.get('/api/characters/:id/quotebook', wrap(async (req, res) => {
+  res.json(await buildQuotebook(req.params.id));
+}));
+
+// 週回顧:彙整近期對話/日誌/預測 → 一頁回顧(落盤保存)
+app.post('/api/characters/:id/weekly-review', wrap(handleWeeklyReview));
+app.get('/api/characters/:id/weekly-reviews', wrap((req, res) => {
+  getCharacter(req.params.id);
+  res.json(readReviews(req.params.id));
 }));
 
 // 對話全文搜尋
