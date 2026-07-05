@@ -248,6 +248,32 @@ export function writeMemory(id, content) {
   atomicWrite(memoryPath(id), content || '');
 }
 
+// ---------- 語料清單快照(供增量更新偵測「哪些檔案是新的/變過的」)----------
+
+export function sourcesManifest(id) {
+  const dir = sourcesDir(id);
+  if (!fs.existsSync(dir)) return {};
+  const m = {};
+  for (const n of fs.readdirSync(dir)) {
+    if (n.startsWith('.')) continue;
+    const st = fs.statSync(path.join(dir, n));
+    if (st.isFile()) m[n] = `${st.size}:${Math.round(st.mtimeMs)}`;
+  }
+  return m;
+}
+
+// ---------- 成長日誌(全域,跨人物;記錄「使用者自己」的變化)----------
+
+const JOURNAL_PATH = path.join(DATA_DIR, 'journal.json');
+
+export function readJournal() {
+  try { return JSON.parse(fs.readFileSync(JOURNAL_PATH, 'utf8')); } catch { return []; }
+}
+
+export function writeJournal(arr) {
+  atomicWrite(JOURNAL_PATH, JSON.stringify(Array.isArray(arr) ? arr : [], null, 2));
+}
+
 // ---------- 可驗證預測(記下預測 → 事後回填實際結果 → 累積準度)----------
 
 export function predictionsPath(id) {
@@ -380,7 +406,7 @@ export function listCouncils() {
   return out;
 }
 
-export function createCouncil({ title, participants }) {
+export function createCouncil({ title, participants, moderator }) {
   if (!Array.isArray(participants) || participants.length < 2) {
     throw new Error('議事會至少需要 2 位已蒸餾的人物');
   }
@@ -389,6 +415,7 @@ export function createCouncil({ title, participants }) {
     id: `council-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     title: title || `議事會 ${new Date().toLocaleString('zh-TW')}`,
     participants, // [{ id, name }]
+    moderator: moderator !== false, // 回合結束由主持人總結(預設開)
     messages: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

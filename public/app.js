@@ -56,6 +56,11 @@ async function api(path, opts = {}) {
     body: opts.body instanceof FormData ? opts.body : opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (!res.ok) {
+    if (res.status === 401) {
+      // 密碼保護中且尚未登入:跳出登入面板
+      const m = $('#modal-login');
+      if (m && !m.open) m.showModal();
+    }
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `請求失敗（${res.status}）`);
   }
@@ -204,6 +209,15 @@ async function openCharacter(id) {
     $('#btn-distill').textContent = '重新蒸餾';
   } else {
     $('#btn-distill').textContent = '開始蒸餾';
+  }
+
+  // 增量更新:蒸餾後有新增/變動的語料檔時顯示
+  const pending = c.pendingSources || [];
+  $('#btn-incremental').hidden = !(c.hasPersona && pending.length);
+  $('#incremental-hint').hidden = !(c.hasPersona && pending.length);
+  if (pending.length) {
+    $('#btn-incremental').textContent = `⟳ 增量更新(${pending.length} 個新檔案)`;
+    $('#incremental-hint').textContent = `偵測到新語料:${pending.join('、')}——增量更新只吃新檔,更新時間線與人物檔案,不必整條重蒸。`;
   }
 
   const furnace = $('#furnace');
@@ -477,6 +491,7 @@ async function refreshCouncils() {
 }
 
 function personaColor(council, personaId) {
+  if (personaId === '__moderator') return 'var(--gold)'; // 主持人固定鎏金色
   const idx = council.participants.findIndex((p) => p.id === personaId);
   return PERSONA_COLORS[(idx < 0 ? 0 : idx) % PERSONA_COLORS.length];
 }
@@ -598,9 +613,23 @@ function appendError2(box, msg) {
   box.scrollTop = box.scrollHeight;
 }
 
+// 自動記憶:離開對話時,若此人物開啟 autoMemory 且這次對話有新訊息,背景送去更新記憶
+function maybeAutoRemember() {
+  const prev = state.chat;
+  if (!prev || !state.current?.autoMemory) return;
+  const grew = prev.messages.length - (state.chatBaseline ?? prev.messages.length);
+  if (grew < 2) return;
+  state.chatBaseline = prev.messages.length; // 防重複觸發
+  fetch(`/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(prev.id)}/remember`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true,
+  }).catch(() => {});
+}
+
 async function openChat(chatId) {
+  maybeAutoRemember(); // 換對話前,先替上一個對話結帳
   const chat = await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(chatId)}`);
   state.chat = chat;
+  state.chatBaseline = chat.messages.length;
   $('#chat-char-name').textContent = state.current.name;
   const chip = $('#chat-mode-chip');
   chip.textContent = (MODE_LABELS[chat.mode] || '對話') + '模式';
@@ -976,10 +1005,353 @@ async function sendMessage() {
   }
 }
 
+// ---------- 關係儀表板 ----------
+
+const DASH_C_SUBJECT = 'var(--jade)';   // 此人物
+const DASH_C_OTHER = 'var(--gold)';     // 對話的另一方
+
+function dashBars(rows, labelEvery = 1) {
+  // rows: [{label, a, b}] → 分組長條(a=subject, b=other)
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.a, r.b)));
+  const bw = 9, gap = 4, group = bw * 2 + gap + 12, H = 150, base = H - 24;
+  const W = rows.length * group + 30;
+  let out = `<svg viewBox="0 0 ${W} ${H}" class="dash-svg" style="min-width:${Math.min(W, 900)}px">`;
+  rows.forEach((r, i) => {
+    const x = 16 + i * group;
+    const ha = Math.round((r.a / max) * (base - 18));
+    const hb = Math.round((r.b / max) * (base - 18));
+    out += `<rect x="${x}" y="${base - ha}" width="${bw}" height="${ha}" rx="2" fill="${DASH_C_SUBJECT}"><title>${esc(r.label)}:${r.a}</title></rect>`;
+    out += `<rect x="${x + bw + gap}" y="${base - hb}" width="${bw}" height="${hb}" rx="2" fill="${DASH_C_OTHER}"><title>${esc(r.label)}:${r.b}</title></rect>`;
+    if (i % labelEvery === 0) out += `<text x="${x + bw + gap / 2}" y="${H - 8}" font-size="9" fill="currentColor" opacity="0.55" text-anchor="middle">${esc(r.label)}</text>`;
+  });
+  return out + '</svg>';
+}
+
+function dashArcLine(months) {
+  // 情感弧線:-2..+2 折線,點上帶當月基調
+  if (!months?.length) return '';
+  const step = 46, W = months.length * step + 40, H = 130, mid = 62, scale = 24;
+  const pts = months.map((m, i) => [24 + i * step, mid - m.valence * scale]);
+  let out = `<svg viewBox="0 0 ${W} ${H}" class="dash-svg" style="min-width:${Math.min(W, 900)}px">`;
+  out += `<line x1="12" y1="${mid}" x2="${W - 12}" y2="${mid}" stroke="currentColor" stroke-opacity="0.15"/>`;
+  out += `<polyline points="${pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${DASH_C_SUBJECT}" stroke-width="2"/>`;
+  months.forEach((m, i) => {
+    const [x, y] = pts[i];
+    out += `<circle cx="${x}" cy="${y}" r="4" fill="${m.valence >= 0 ? DASH_C_SUBJECT : 'var(--cinnabar-bright)'}"><title>${esc(m.ym)}(${m.valence > 0 ? '+' : ''}${m.valence})${esc(m.tone)}</title></circle>`;
+    out += `<text x="${x}" y="${H - 6}" font-size="9" fill="currentColor" opacity="0.55" text-anchor="middle">${esc(m.ym.slice(2))}</text>`;
+  });
+  return out + '</svg>';
+}
+
+function renderDashboard(a) {
+  const S = esc(a.subjectLabel), O = esc(a.otherLabel);
+  const t = a.totals;
+  const pct = (x, y) => (x + y ? Math.round((x / (x + y)) * 100) : 0);
+  const avgLen = (chars, n) => (n ? Math.round(chars / n) : 0);
+  const legend = `<span class="dash-key"><i style="background:${DASH_C_SUBJECT}"></i>${S}</span><span class="dash-key"><i style="background:${DASH_C_OTHER}"></i>${O}</span>`;
+
+  const cards = [
+    ['訊息總數', `${(t.subject + t.other).toLocaleString()}`, `${S} ${t.subject.toLocaleString()}|${O} ${t.other.toLocaleString()}`],
+    ['時間範圍', `${a.range.from || '—'} → ${a.range.to || '—'}`, `活躍 ${a.range.activeDays} 天`],
+    ['誰先開場', `${S} ${pct(a.initiations.subject, a.initiations.other)}%`, `${a.initiations.subject}:${a.initiations.other}(每日第一則)`],
+    ['深夜訊息(23–06)', `${a.lateNight.subject + a.lateNight.other}`, `${S} ${a.lateNight.subject}|${O} ${a.lateNight.other}`],
+    ['平均訊息長度', `${avgLen(t.subjectChars, t.subject)} / ${avgLen(t.otherChars, t.other)} 字`, `${S} / ${O}`],
+    ['貼圖・媒體', `${t.media.toLocaleString()}`, '貼圖、照片、收回訊息等'],
+  ].map(([k, v, sub]) => `<div class="dash-card"><div class="dash-k">${k}</div><div class="dash-v">${v}</div><div class="dash-sub">${sub}</div></div>`).join('');
+
+  const monthRows = a.months.map((m) => ({ label: m.ym.slice(2), a: m.subject, b: m.other }));
+  const hourRows = Array.from({ length: 24 }, (_, h) => ({ label: String(h), a: a.hourHist.subject[h], b: a.hourHist.other[h] }));
+
+  let arcHtml = `<p class="hint">還沒生成。按右上「✨ 生成情感弧線」,用模型判讀逐月互動基調與轉折點(結果會保存,之後免費重看)。</p>`;
+  if (a.arc?.months?.length) {
+    arcHtml = dashArcLine(a.arc.months)
+      + `<div class="dash-tones">${a.arc.months.map((m) => `<div><b>${esc(m.ym)}</b>(${m.valence > 0 ? '+' : ''}${m.valence})${esc(m.tone)}</div>`).join('')}</div>`
+      + (a.arc.turningPoints?.length
+        ? `<h4>關鍵轉折</h4><ul class="dash-turns">${a.arc.turningPoints.map((tp) => `<li><b>${esc(tp.date)}</b> — ${esc(tp.label)}</li>`).join('')}</ul>`
+        : '');
+  }
+
+  $('#dash-body').innerHTML = `
+    <div class="dash-cards">${cards}</div>
+    <div class="dash-section"><h4>每月訊息量 ${legend}</h4><div class="dash-scroll">${dashBars(monthRows)}</div></div>
+    <div class="dash-section"><h4>一天中的什麼時候在聊 ${legend}</h4><div class="dash-scroll">${dashBars(hourRows, 2)}</div></div>
+    <div class="dash-section"><h4>情感弧線</h4>${arcHtml}</div>
+    <p class="hint">統計基於語料中的聊天匯出檔(${a.files.map((f) => esc(f.name)).join('、') || '無'})${a.skipped.length ? `;非聊天格式已略過:${a.skipped.map(esc).join('、')}` : ''}。這些是「紀錄的形狀」,不是關係的全部——線下的相處、沒說出口的部分,都不在這裡。</p>`;
+}
+
+async function openDashboard() {
+  if (!state.current) return;
+  $('#dash-title').textContent = `關係儀表板 · ${state.current.name}`;
+  $('#dash-body').innerHTML = '<p class="hint">整理語料統計中⋯</p>';
+  showView('view-dashboard');
+  try {
+    state.dash = await api(`/api/characters/${encodeURIComponent(state.current.id)}/analytics`);
+    renderDashboard(state.dash);
+  } catch (err) {
+    $('#dash-body').innerHTML = `<p class="hint" style="color:var(--cinnabar-bright)">${esc(err.message)}</p>`;
+  }
+}
+
 // ---------- 事件繫結 ----------
 
 function bind() {
   setupVoice(); // 語音(若瀏覽器支援)
+
+  // PWA:保守 SW(network-first,離線才回退快取)
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+  // 行動版選單抽屜
+  const closeNav = () => document.body.classList.remove('nav-open');
+  $('#btn-menu').addEventListener('click', () => document.body.classList.toggle('nav-open'));
+  $('#nav-scrim').addEventListener('click', closeNav);
+  document.querySelector('.sidebar').addEventListener('click', (e) => {
+    if (e.target.closest('button, li, .char-card, .council-card')) closeNav();
+  });
+
+  // 登入(密碼保護實例)
+  $('#form-login').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = $('#login-error');
+    errEl.hidden = true;
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: $('#login-password').value }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '登入失敗');
+      location.reload();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.hidden = false;
+    }
+  });
+
+  // 關係儀表板
+  $('#btn-dashboard').addEventListener('click', openDashboard);
+  $('#btn-dash-back').addEventListener('click', () => showView('view-character'));
+  $('#btn-dash-arc').addEventListener('click', async () => {
+    const btn = $('#btn-dash-arc');
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = '判讀中⋯(約半分鐘)';
+    try {
+      const arc = await api(`/api/characters/${encodeURIComponent(state.current.id)}/analytics/arc`, { method: 'POST', body: {} });
+      if (state.dash) { state.dash.arc = arc; renderDashboard(state.dash); }
+      toast('情感弧線已生成並保存');
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+
+  // 對話搜尋(防抖;清空即還原列表)
+  let searchTimer = null;
+  $('#chat-search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const q = $('#chat-search').value.trim();
+      const ul = $('#chat-list');
+      if (!q) {
+        try { renderChats(await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats`)); } catch { /* 忽略 */ }
+        return;
+      }
+      try {
+        const hits = await api(`/api/characters/${encodeURIComponent(state.current.id)}/chat-search?q=${encodeURIComponent(q)}`);
+        ul.innerHTML = hits.length ? '' : '<li class="muted">沒有符合的對話</li>';
+        for (const h of hits) {
+          const li = document.createElement('li');
+          li.innerHTML = `<span class="mode-chip${modeChipClass(h.mode)}">${MODE_LABELS[h.mode] || '對話'}</span>
+            <span class="cl-title">${esc(h.title)}<br><small class="cl-snippet">${esc(h.snippet)}</small></span>`;
+          li.addEventListener('click', () => openChat(h.chatId));
+          ul.appendChild(li);
+        }
+      } catch (err) { toast(err.message, true); }
+    }, 250);
+  });
+
+  // 匯出對話為 Markdown
+  $('#btn-export-chat').addEventListener('click', () => {
+    const c = state.chat;
+    if (!c) return;
+    const lines = [`# ${state.current.name} · ${c.title}`, `模式:${MODE_LABELS[c.mode] || c.mode}｜建立:${new Date(c.createdAt).toLocaleString('zh-TW')}`, ''];
+    for (const m of c.messages) {
+      if (m.role !== 'user' && m.role !== 'assistant') continue;
+      lines.push(`**${m.role === 'user' ? '你' : state.current.name}**:`, m.content, '');
+      if (m.coach) lines.push(`> 💬 教練:${m.coach}`, '');
+    }
+    if (c.review?.content) lines.push('---', '', c.review.content, '');
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const aEl = document.createElement('a');
+    aEl.href = url;
+    aEl.download = `${state.current.name}-${c.title}.md`.replace(/[\\/:*?"<>|]/g, '_');
+    document.body.appendChild(aEl);
+    aEl.click();
+    aEl.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  // 成長日誌
+  const renderJournal = async () => {
+    const list = $('#journal-list');
+    const entries = await api('/api/journal');
+    list.innerHTML = entries.length ? '' : '<p class="muted">還沒有日誌。每次對話後記一行,累積起來就是你的軌跡。</p>';
+    for (const en of entries) {
+      const div = document.createElement('div');
+      div.className = 'journal-item';
+      div.innerHTML = `<div class="journal-meta">${esc(new Date(en.at).toLocaleString('zh-TW'))}${en.characterName ? `・與 ${esc(en.characterName)}` : ''}${en.mode ? `・${esc(MODE_LABELS[en.mode] || en.mode)}` : ''}<button class="cl-del" title="刪除">✕</button></div>
+        <div class="journal-text">${esc(en.text)}</div>`;
+      div.querySelector('.cl-del').addEventListener('click', async () => {
+        if (!confirm('刪除這則日誌?')) return;
+        await api(`/api/journal/${encodeURIComponent(en.id)}`, { method: 'DELETE' });
+        renderJournal();
+      });
+      list.appendChild(div);
+    }
+  };
+  const openJournal = async (fromChat) => {
+    $('#journal-compose').hidden = !fromChat;
+    $('#journal-text').value = '';
+    try { await renderJournal(); } catch (err) { toast(err.message, true); return; }
+    $('#modal-journal').showModal();
+  };
+  $('#btn-journal').addEventListener('click', () => openJournal(false));
+  $('#btn-journal-here').addEventListener('click', () => openJournal(true));
+  $('#btn-journal-suggest').addEventListener('click', async () => {
+    if (!state.chat) return;
+    const btn = $('#btn-journal-suggest');
+    btn.disabled = true;
+    try {
+      const { suggestion } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(state.chat.id)}/journal-suggest`, { method: 'POST', body: {} });
+      $('#journal-text').value = suggestion;
+    } catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; }
+  });
+  $('#btn-journal-save').addEventListener('click', async () => {
+    const text = $('#journal-text').value.trim();
+    if (!text) { toast('先寫一句吧', true); return; }
+    try {
+      await api('/api/journal', {
+        method: 'POST',
+        body: { text, characterId: state.current?.id, characterName: state.current?.name, mode: state.chat?.mode },
+      });
+      $('#journal-text').value = '';
+      await renderJournal();
+      toast('記下了');
+    } catch (err) { toast(err.message, true); }
+  });
+
+  // A/B 比較
+  let abBusy = false;
+  $('#btn-ab').addEventListener('click', () => {
+    if (!state.chat) return;
+    $('#ab-input-a').value = $('#composer-input').value.trim();
+    $('#ab-input-b').value = '';
+    $('#ab-panes').hidden = true;
+    $('#ab-reply-a').innerHTML = '';
+    $('#ab-reply-b').innerHTML = '';
+    $('#btn-ab-adopt-a').disabled = true;
+    $('#btn-ab-adopt-b').disabled = true;
+    $('#modal-ab').showModal();
+  });
+  $('#btn-ab-run').addEventListener('click', async () => {
+    if (abBusy || !state.chat) return;
+    const a = $('#ab-input-a').value.trim();
+    const b = $('#ab-input-b').value.trim();
+    if (!a || !b) { toast('兩種說法都要填', true); return; }
+    const chat = state.chat;
+    abBusy = true;
+    $('#btn-ab-run').disabled = true;
+    $('#ab-panes').hidden = false;
+    const pane = { a: $('#ab-reply-a'), b: $('#ab-reply-b') };
+    const acc = { a: '', b: '' };
+    const final = { a: null, b: null };
+    pane.a.innerHTML = pane.b.innerHTML = '<span class="muted">生成中⋯</span>';
+    try {
+      const res = await fetch(
+        `/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(chat.id)}/ab`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a, b }) }
+      );
+      const ctype = res.headers.get('content-type') || '';
+      if (!res.ok || !ctype.includes('text/event-stream')) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `請求失敗（${res.status}）`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const raw = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let event = 'message', data = '';
+          for (const l of raw.split('\n')) {
+            if (l.startsWith('event: ')) event = l.slice(7).trim();
+            else if (l.startsWith('data: ')) data += l.slice(6);
+          }
+          if (!data) continue;
+          let p;
+          try { p = JSON.parse(data); } catch { continue; }
+          if (event === 'delta' && pane[p.v]) {
+            if (!acc[p.v]) pane[p.v].innerHTML = '';
+            acc[p.v] += p.text;
+            pane[p.v].innerHTML = renderMd(acc[p.v]);
+          } else if (event === 'variant_done' && pane[p.v]) {
+            final[p.v] = p.text;
+            pane[p.v].innerHTML = renderMd(p.text);
+          } else if (event === 'variant_error' && pane[p.v]) {
+            pane[p.v].innerHTML = `<span style="color:var(--cinnabar-bright)">${esc(p.message)}</span>`;
+          } else if (event === 'error') {
+            throw new Error(p.message || '發生錯誤');
+          }
+        }
+      }
+      const adopt = (variant) => async () => {
+        const content = variant === 'a' ? a : b;
+        const reply = final[variant];
+        if (!reply) return;
+        try {
+          await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats/${encodeURIComponent(chat.id)}/ab-commit`, {
+            method: 'POST', body: { content, reply },
+          });
+          chat.messages.push({ role: 'user', content }, { role: 'assistant', content: reply });
+          if (chat === state.chat) {
+            appendMessage('user', content);
+            appendMessage('assistant', reply);
+          }
+          $('#modal-ab').close();
+          toast(`已採用說法 ${variant.toUpperCase()},寫入對話`);
+        } catch (err) { toast(err.message, true); }
+      };
+      $('#btn-ab-adopt-a').onclick = adopt('a');
+      $('#btn-ab-adopt-b').onclick = adopt('b');
+      $('#btn-ab-adopt-a').disabled = !final.a;
+      $('#btn-ab-adopt-b').disabled = !final.b;
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      abBusy = false;
+      $('#btn-ab-run').disabled = false;
+    }
+  });
+
+  // 語料增量更新
+  $('#btn-incremental').addEventListener('click', async () => {
+    if (!confirm('用新語料做增量更新?會更新時間線、綜合報告與 persona(舊版會自動存入版本歷史)。')) return;
+    try {
+      const { jobId } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/distill-incremental`, { method: 'POST', body: {} });
+      $('#btn-incremental').hidden = true;
+      $('#incremental-hint').hidden = true;
+      attachJobStream(jobId);
+    } catch (err) { toast(err.message, true); }
+  });
+
   // 新增人物
   const syncConsentRow = () => {
     $('#consent-row').hidden = $('#new-char-subject').value !== 'private';
@@ -1040,7 +1412,14 @@ function bind() {
     status.hidden = false;
     status.textContent = '匯入中⋯正在抓取並建立人物(從 GitHub 拉取可能要幾秒)';
     try {
-      const r = await api('/api/import', { method: 'POST', body });
+      let r = await api('/api/import', { method: 'POST', body });
+      if (r.needsConfirm) {
+        // 注入掃描命中:列出可疑指令,使用者過目後才真正匯入
+        const ok = confirm(`這份 persona 含有可疑指令,匯入後會成為系統提示的一部分:\n\n- ${r.warnings.join('\n- ')}\n\n確定仍要匯入?`);
+        if (!ok) { status.textContent = '已取消匯入。'; return; }
+        status.textContent = '匯入中⋯';
+        r = await api('/api/import', { method: 'POST', body: { ...body, force: true } });
+      }
       $('#modal-import').close();
       toast(`已匯入「${r.name}」${r.researchCount ? `(含 ${r.researchCount} 份研究檔)` : ''},可以直接對話了`);
       await refreshCharacters();
@@ -1122,8 +1501,21 @@ function bind() {
     try {
       const { memory } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/memory`);
       $('#memory-editor').value = memory || '';
+      $('#memory-auto').checked = Boolean(state.current?.autoMemory);
       $('#modal-memory').showModal();
     } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  $('#memory-auto').addEventListener('change', async (e) => {
+    try {
+      await api(`/api/characters/${encodeURIComponent(state.current.id)}`, {
+        method: 'PATCH', body: { autoMemory: e.target.checked },
+      });
+      state.current.autoMemory = e.target.checked;
+      toast(e.target.checked ? '已開啟:離開對話時自動更新記憶' : '已關閉自動記憶');
+    } catch (err) {
+      e.target.checked = !e.target.checked;
       toast(err.message, true);
     }
   });
@@ -1440,6 +1832,7 @@ function bind() {
 
   // 對話視圖
   $('#btn-back').addEventListener('click', async () => {
+    maybeAutoRemember(); // 離開對話:自動記憶(若開啟)
     showView('view-character');
     try {
       renderChats(await api(`/api/characters/${encodeURIComponent(state.current.id)}/chats`));
@@ -1519,7 +1912,8 @@ function bind() {
     if (ids.length < 2) { toast('請至少選 2 位人物', true); return; }
     try {
       const council = await api('/api/councils', {
-        method: 'POST', body: { title: $('#council-title').value.trim(), participantIds: ids },
+        method: 'POST',
+        body: { title: $('#council-title').value.trim(), participantIds: ids, moderator: $('#council-moderator').checked },
       });
       $('#modal-new-council').close();
       await refreshCouncils();

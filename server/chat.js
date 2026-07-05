@@ -1,4 +1,4 @@
-import { chatSystemBlocks, coachPrompt, getScenario, sessionReviewPrompt, memoryUpdatePrompt } from './prompts.js';
+import { chatSystemBlocks, coachPrompt, getScenario, sessionReviewPrompt, memoryUpdatePrompt, journalSuggestPrompt } from './prompts.js';
 import { streamChat, describeError } from './llm.js';
 import { getCharacter, getChat, writeChat, readPersona, readMemory, writeMemory } from './store.js';
 import { toTraditional, shouldForceTraditional, makeStreamConverter } from './zhtw.js';
@@ -234,6 +234,144 @@ export async function handleMemoryUpdate(req, res) {
     const updated = (shouldForceTraditional(character) ? toTraditional(r.text) : r.text).trim();
     writeMemory(charId, updated);
     res.json({ ok: true, memory: updated });
+  } catch (err) {
+    if (!aborted) res.status(500).json({ error: describeError(err) });
+  }
+}
+
+/**
+ * A/B 排練預覽:同一段對話脈絡,兩種說法並行生成(SSE,變體標記 v:'a'|'b'),不落盤。
+ */
+export async function handleABPreview(req, res) {
+  const { id: charId, chatId } = req.params;
+  const { a, b } = req.body || {};
+  if (!a || !a.trim() || !b || !b.trim()) {
+    res.status(400).json({ error: '兩種說法都要填' });
+    return;
+  }
+  let character, chat, persona;
+  try {
+    character = getCharacter(charId);
+    chat = getChat(charId, chatId);
+    persona = readPersona(charId);
+  } catch {
+    res.status(404).json({ error: '找不到人物或對話' });
+    return;
+  }
+  if (!persona) { res.status(400).json({ error: '此人物尚未完成蒸餾' }); return; }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const ctrl = new AbortController();
+  let aborted = false;
+  res.on('close', () => { if (!res.writableEnded) { aborted = true; ctrl.abort(); } });
+
+  const memory = readMemory(charId);
+  const system = chatSystemBlocks(character.name, persona, chat.conditions, chat.mode, chat.scenario, memory);
+  const base = chat.messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role, content: m.content }));
+  // 兩個變體共用「系統 + 既有歷史」前綴:在最後一則歷史掛快取斷點,第二個變體讀快取
+  if (base.length) {
+    const last = base[base.length - 1];
+    last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
+  }
+  const forceTrad = shouldForceTraditional(character);
+
+  const runVariant = async (v, content) => {
+    const conv = forceTrad
+      ? makeStreamConverter((chunk) => { if (!aborted && chunk) send('delta', { v, text: chunk }); })
+      : null;
+    try {
+      const result = await streamChat({
+        system,
+        messages: [...base, { role: 'user', content }],
+        maxTokens: 8000,
+        signal: ctrl.signal,
+        onDelta: (d) => {
+          if (aborted) return;
+          if (conv) conv.push(d);
+          else send('delta', { v, text: d });
+        },
+      });
+      if (conv) conv.flush();
+      if (aborted) return;
+      const reply = forceTrad ? toTraditional(result.text) : result.text;
+      send('variant_done', { v, text: reply });
+    } catch (err) {
+      if (!aborted) send('variant_error', { v, message: describeError(err) });
+    }
+  };
+
+  await Promise.all([runVariant('a', a.trim()), runVariant('b', b.trim())]);
+  if (aborted) return;
+  send('done', {});
+  res.end();
+}
+
+/**
+ * A/B 採用:把選定的說法與預覽時的回覆一起落盤(不重新生成,保留使用者看到的那個回應)。
+ */
+export function handleABCommit(req, res) {
+  const { id: charId, chatId } = req.params;
+  const { content, reply } = req.body || {};
+  if (!content || !content.trim() || !reply || !reply.trim()) {
+    res.status(400).json({ error: '缺少說法或回覆內容' });
+    return;
+  }
+  let chat;
+  try {
+    getCharacter(charId);
+    chat = getChat(charId, chatId);
+  } catch {
+    res.status(404).json({ error: '找不到人物或對話' });
+    return;
+  }
+  const at = new Date().toISOString();
+  chat.messages.push(
+    { role: 'user', content: content.trim(), at },
+    { role: 'assistant', content: reply.trim(), at, ab: true }
+  );
+  writeChat(charId, chat);
+  res.json({ ok: true });
+}
+
+/**
+ * 成長日誌建議:以使用者第一人稱,濃縮這段對話的收穫成 1–2 句。
+ */
+export async function handleJournalSuggest(req, res) {
+  const { id: charId, chatId } = req.params;
+  let character, chat;
+  try {
+    character = getCharacter(charId);
+    chat = getChat(charId, chatId);
+  } catch {
+    res.status(404).json({ error: '找不到人物或對話' });
+    return;
+  }
+  const convo = (chat.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (convo.length < 2) { res.status(400).json({ error: '對話還太短' }); return; }
+  const ctrl = new AbortController();
+  let aborted = false;
+  res.on('close', () => { if (!res.writableEnded) { aborted = true; ctrl.abort(); } });
+  const transcript = convo.slice(-30)
+    .map((m) => `${m.role === 'user' ? '使用者' : character.name}：${m.content}`)
+    .join('\n');
+  try {
+    const r = await streamChat({
+      system: [{ type: 'text', text: journalSuggestPrompt(character.name) }],
+      messages: [{ role: 'user', content: transcript }],
+      maxTokens: 300,
+      signal: ctrl.signal,
+    });
+    if (aborted) return;
+    const text = (shouldForceTraditional(character) ? toTraditional(r.text) : r.text).trim();
+    res.json({ suggestion: text });
   } catch (err) {
     if (!aborted) res.status(500).json({ error: describeError(err) });
   }

@@ -530,6 +530,58 @@ export function sessionReviewPrompt(characterName, s) {
 鐵律:引用使用者原話時必須是他真的說過的;不評價「${characterName}」的人格;不替使用者判斷關係值不值得、會不會成;不教操縱手段。`;
 }
 
+// 情感弧線:逐月取樣的對話 → 每月基調/效價 + 轉折點(嚴格 JSON)
+export function emotionalArcPrompt(characterName) {
+  return `你在分析一段長期對話的「情感弧線」。你會收到逐月取樣的訊息(S=「${characterName}」,U=另一方)。針對每個月,判讀兩人互動的整體基調;並找出全期間 3–8 個關鍵轉折點。
+
+只輸出嚴格 JSON,不要其他文字:
+{
+  "months": [ { "ym": "2025-03", "valence": 1, "tone": "一句話描述該月互動基調" } ],
+  "turningPoints": [ { "date": "YYYY/M/D 或 YYYY/M", "label": "發生了什麼、氛圍如何轉向" } ]
+}
+
+規則:valence 為 -2(疏離/緊張)到 +2(親近/溫暖)的整數;tone 一句話、具體、不超過 30 字;轉折點只挑取樣中有實際證據的,不要臆測;months 涵蓋收到的每個月。`;
+}
+
+// 議事會主持人:全員發言後的中立總結
+export function councilModeratorPrompt() {
+  return `你是議事會主持人。與會顧問已針對使用者的問題各自發言(訊息中以 [名字]: 標示)。請中立、精煉地總結這一輪:
+
+1. **共識**:大家都同意什麼
+2. **分歧**:誰與誰在哪裡不同、各自的理由
+3. **盲點**:全場都沒提到、但值得使用者想的
+4. **收斂建議**:給使用者 1–3 條下一步(標注參考了誰的觀點)
+
+條列、全文不超過 300 字。不要重述每位發言的全文,不要自己加入新立場。`;
+}
+
+// 增量更新:時間線維護(舊時間線 + 新語料 → 完整更新版)
+export function timelineUpdatePrompt(characterName, outputLanguage) {
+  return `你是「${characterName}」人物時間線的維護者。你會收到:①既有時間線;②新加入的語料。請輸出**完整的更新版時間線**(整份重寫,不是只列新增)。
+
+鐵則:
+- 訊息時間戳是權威時間,直接採信;時間線必須延伸到新語料中最晚的時間戳。
+- 既有內容除非與新證據衝突,否則保留;新舊自然合併,不要標示「新增段落」。
+- 明確更新「語料時間覆蓋範圍(資訊截至何時)」。
+${languageDirective(outputLanguage)}`;
+}
+
+// 增量更新:綜合報告增修(舊綜合 + 新時間線 + 新語料 → 完整更新版)
+export function synthesisUpdatePrompt(characterName, outputLanguage) {
+  return `你是「女媧」蒸餾管線的框架提煉師,現在執行**增量更新**:你會收到「${characterName}」既有的綜合報告、更新後的時間線、以及新加入的語料。請輸出完整的更新版綜合報告(整份重寫,維持原有章節結構)。
+
+原則:
+- 保留仍然成立的內容;依新語料的證據增補或修正,尤其「最新動態」與時間覆蓋範圍。
+- 心智模型若有新證據就補進來源;若新語料顯示模式改變,如實修訂並註明變化。
+- 引語必須出自語料原文,查無出處寧可不用;不要為了「看起來有更新」而虛構變化。
+${languageDirective(outputLanguage)}`;
+}
+
+// 成長日誌建議:以使用者第一人稱濃縮這次對話的收穫
+export function journalSuggestPrompt(characterName) {
+  return `你是溫柔而誠實的反思陪伴者。閱讀使用者與「${characterName}」的這段對話,以**使用者的第一人稱**寫 1–2 句「成長日誌」——他今天看清了什麼、放下了什麼、或往前走了哪一步。具體、誠實、不雞湯、不美化。只輸出那 1–2 句,不要引號或前言。`;
+}
+
 // 記憶更新:把一段對話裡「值得跨對話記住」的事,合併進既有記憶(整份重寫,去重、精簡)
 export function memoryUpdatePrompt(characterName) {
   return `你在維護「${characterName}」對使用者的長期記憶——一份會被注入未來每一場對話的筆記,好讓「${characterName}」記得使用者是誰、你們之間發生過什麼。

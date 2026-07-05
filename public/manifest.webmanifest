@@ -1,0 +1,13 @@
+{
+  "name": "女媧工坊 · 蒸餾思維",
+  "short_name": "女媧工坊",
+  "description": "從文件蒸餾人物思維框架,可對話、預測、感情處理與關係練習",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#141210",
+  "theme_color": "#141210",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

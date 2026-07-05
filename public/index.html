@@ -8,10 +8,16 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#141210">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='14' fill='%23c8442a'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='%23f2e6cf' font-family='serif' font-weight='bold'>媧</text></svg>">
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div>
+<button class="menu-btn" id="btn-menu" aria-label="開關選單">☰</button>
+<div class="nav-scrim" id="nav-scrim" aria-hidden="true"></div>
 
 <aside class="sidebar">
   <header class="brand">
@@ -36,6 +42,7 @@
   </div>
 
   <footer class="sidebar-footer">
+    <button class="btn btn-ghost btn-block btn-small" id="btn-journal">✍ 成長日誌</button>
     <button class="btn btn-ghost btn-block" id="btn-settings">⚙ 設定</button>
   </footer>
 </aside>
@@ -144,9 +151,11 @@
           <div class="panel-actions">
             <button class="btn btn-primary btn-small" id="btn-edit-persona">檢視 / 編輯 persona.md</button>
             <button class="btn btn-ghost btn-small" id="btn-view-memory">跨對話記憶</button>
+            <button class="btn btn-outline btn-small" id="btn-incremental" hidden>⟳ 增量更新</button>
           </div>
         </div>
         <p class="hint" id="persona-hint"></p>
+        <p class="hint" id="incremental-hint" hidden></p>
       </div>
 
       <!-- 對話 -->
@@ -155,9 +164,11 @@
           <h3><span class="panel-num">伍</span>對話與預測</h3>
           <div class="panel-actions">
             <button class="btn btn-primary btn-small" id="btn-new-chat">✦ 開新對話</button>
+            <button class="btn btn-ghost btn-small" id="btn-dashboard">關係儀表板</button>
             <button class="btn btn-ghost btn-small" id="btn-predictions">預測記錄</button>
           </div>
         </div>
+        <input type="search" class="chat-search" id="chat-search" placeholder="搜尋過往對話⋯">
         <ul class="chat-list" id="chat-list"></ul>
       </div>
     </div>
@@ -191,6 +202,8 @@
       <button class="btn btn-ghost btn-small" id="btn-save-prediction" hidden title="把這則預測記下來,事後回填實際結果">存為預測</button>
       <button class="btn btn-ghost btn-small" id="btn-remember" title="把這段對話裡值得長期記住的事,存進此人物的跨對話記憶">更新記憶</button>
       <button class="btn btn-ghost btn-small" id="btn-review" hidden>結束並檢討</button>
+      <button class="btn btn-ghost btn-small" id="btn-journal-here" title="記一筆這次對話帶給你的收穫">✍ 日誌</button>
+      <button class="btn btn-ghost btn-small" id="btn-export-chat" title="把整段對話匯出成 Markdown">匯出</button>
       <button class="btn btn-ghost btn-small" id="btn-show-conditions">情境條件</button>
     </header>
     <div class="conditions-banner" id="conditions-banner" hidden></div>
@@ -198,8 +211,21 @@
     <footer class="composer">
       <button class="btn btn-ghost mic-btn" id="btn-mic" title="語音輸入(用講的)" aria-label="語音輸入" hidden>🎤</button>
       <textarea id="composer-input" rows="2" placeholder="輸入訊息⋯(Enter 送出,Shift+Enter 換行)"></textarea>
+      <button class="btn btn-ghost ab-btn" id="btn-ab" title="A/B 比較:同一個節點試兩種說法,並排看可能的反應">A/B</button>
       <button class="btn btn-primary" id="btn-send">送出</button>
     </footer>
+  </section>
+
+  <!-- 關係儀表板 -->
+  <section class="view view-dashboard" id="view-dashboard" hidden>
+    <header class="chat-header">
+      <button class="btn btn-ghost btn-small" id="btn-dash-back">← 返回</button>
+      <div class="chat-header-title">
+        <h2 id="dash-title">關係儀表板</h2>
+      </div>
+      <button class="btn btn-outline btn-small" id="btn-dash-arc" title="用模型判讀逐月互動基調與轉折點(一次呼叫,結果會保存)">✨ 生成情感弧線</button>
+    </header>
+    <div class="dash-body" id="dash-body"></div>
   </section>
 </main>
 
@@ -398,6 +424,60 @@
   </form>
 </dialog>
 
+<!-- A/B 排練比較 -->
+<dialog id="modal-ab" class="modal-wide">
+  <div class="modal-form">
+    <h3>A/B 比較<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <p class="hint">同一個對話節點,試兩種說法——並排看對方可能的反應,再決定採用哪一種(採用的那組會寫入對話)。</p>
+    <div class="ab-inputs">
+      <label>說法 A<textarea id="ab-input-a" rows="3" placeholder="第一種講法⋯"></textarea></label>
+      <label>說法 B<textarea id="ab-input-b" rows="3" placeholder="第二種講法⋯"></textarea></label>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="btn-ab-run">開始比較</button>
+    </div>
+    <div class="ab-panes" id="ab-panes" hidden>
+      <div class="ab-pane">
+        <div class="ab-pane-head"><b>A</b><button class="btn btn-outline btn-small" id="btn-ab-adopt-a" disabled>採用 A</button></div>
+        <div class="md-body ab-reply" id="ab-reply-a"></div>
+      </div>
+      <div class="ab-pane">
+        <div class="ab-pane-head"><b>B</b><button class="btn btn-outline btn-small" id="btn-ab-adopt-b" disabled>採用 B</button></div>
+        <div class="md-body ab-reply" id="ab-reply-b"></div>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<!-- 成長日誌 -->
+<dialog id="modal-journal" class="modal-wide">
+  <div class="modal-form">
+    <h3>成長日誌<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <p class="hint">這裡記錄的是<b>你自己</b>的變化——每次對話後,一行「今天我看清了什麼」。累積起來,就是你的軌跡。</p>
+    <div class="journal-compose" id="journal-compose" hidden>
+      <textarea id="journal-text" rows="2" placeholder="今天我看清了⋯ / 我放下了⋯ / 我往前走了一步⋯"></textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost btn-small" id="btn-journal-suggest">✨ 幫我總結這次</button>
+        <button type="button" class="btn btn-primary btn-small" id="btn-journal-save">記下</button>
+      </div>
+    </div>
+    <div class="journal-list" id="journal-list"></div>
+  </div>
+</dialog>
+
+<!-- 登入(設 NUWA_PASSWORD 時) -->
+<dialog id="modal-login">
+  <form method="dialog" class="modal-form" id="form-login">
+    <h3>需要登入</h3>
+    <p class="hint">此實例已設定密碼保護(NUWA_PASSWORD)。</p>
+    <label>密碼<input type="password" id="login-password" autocomplete="current-password" required></label>
+    <p class="hint" id="login-error" hidden style="color:var(--cinnabar-bright)"></p>
+    <div class="modal-actions">
+      <button type="submit" class="btn btn-primary">登入</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- 訓練檢討報告 -->
 <dialog id="modal-review">
   <div class="modal-form review-modal">
@@ -417,6 +497,7 @@
     <p class="hint">選 2 位以上已蒸餾的人物同場討論——他們會依序回應同一個問題,後發言者看得到前者說了什麼,可以附和或反駁。</p>
     <label>標題(選填)<input type="text" id="council-title" placeholder="例:該不該接這個工作?"></label>
     <div class="council-picker" id="council-picker"></div>
+    <label class="check-row"><input type="checkbox" id="council-moderator" checked> 每輪結束由「主持人」總結共識、分歧與盲點</label>
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" data-close>取消</button>
       <button type="submit" class="btn btn-primary">召集</button>
@@ -456,6 +537,7 @@
       </span>
     </h3>
     <p class="hint">這是此人物「跨對話」記得、關於你與你們關係的事,會注入每一場對話。可手動編輯。要累積記憶,在對話中按「更新記憶」。</p>
+    <label class="check-row"><input type="checkbox" id="memory-auto"> 離開對話時自動更新記憶(每次一小筆模型呼叫)</label>
     <textarea class="persona-editor" id="memory-editor" spellcheck="false" placeholder="(還沒有記憶。在對話裡按「更新記憶」開始累積,或直接在這裡手寫。)"></textarea>
   </div>
 </dialog>

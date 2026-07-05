@@ -921,3 +921,105 @@ dialog::backdrop { background: rgba(10, 8, 6, 0.72); backdrop-filter: blur(3px);
   .vertical-rail { display: none; }
   .view { padding: 26px 22px 50px; }
 }
+
+/* ============ 行動版(RWD)+ 選單抽屜 ============ */
+
+.menu-btn {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 70;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--ink-1);
+  color: var(--gold);
+  font-size: 19px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.nav-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+@media (max-width: 760px) {
+  body { grid-template-columns: 1fr; overflow: auto; }
+  .vertical-rail { display: none; }
+  .menu-btn { display: flex; }
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: min(84vw, 320px);
+    z-index: 50;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    box-shadow: 8px 0 30px rgba(0, 0, 0, 0.5);
+  }
+  body.nav-open .sidebar { transform: none; }
+  body.nav-open .nav-scrim { display: block; }
+  .chat-header { padding-left: 62px; flex-wrap: wrap; row-gap: 6px; }
+  .messages { padding: 16px 12px 12px; }
+  .msg { max-width: 92%; }
+  .composer { flex-wrap: wrap; }
+  dialog { width: 94vw; max-width: 94vw; }
+  .view-header, .character-header { padding-left: 62px; }
+  .ab-inputs, .ab-panes, .versions-layout { grid-template-columns: 1fr !important; }
+}
+
+/* ============ 關係儀表板 ============ */
+
+.dash-body { flex: 1; overflow-y: auto; padding: 22px 28px 30px; display: flex; flex-direction: column; gap: 20px; }
+.dash-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.dash-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--ink-1); }
+.dash-k { font-size: 12px; letter-spacing: 1px; opacity: 0.6; }
+.dash-v { font-size: 19px; color: var(--gold); margin: 4px 0 2px; line-height: 1.3; }
+.dash-sub { font-size: 12px; opacity: 0.55; }
+.dash-section h4 { margin: 0 0 8px; display: flex; align-items: center; gap: 14px; font-size: 14px; letter-spacing: 1px; }
+.dash-key { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; opacity: 0.75; font-weight: normal; }
+.dash-key i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.dash-scroll { overflow-x: auto; padding-bottom: 4px; }
+.dash-svg { display: block; height: 150px; color: var(--paper); }
+.dash-tones { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 16px; font-size: 12.5px; opacity: 0.85; margin-top: 8px; }
+.dash-turns { margin: 6px 0 0; padding-left: 18px; font-size: 13.5px; line-height: 1.8; }
+
+/* ============ A/B 比較 ============ */
+
+.ab-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ab-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.ab-pane { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 120px; }
+.ab-pane-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--gold); }
+.ab-reply { max-height: 40vh; overflow-y: auto; font-size: 14px; line-height: 1.7; }
+.ab-btn { align-self: stretch; padding: 0 10px; font-size: 12px; letter-spacing: 1px; }
+
+/* ============ 成長日誌 ============ */
+
+.journal-compose textarea { width: 100%; }
+.journal-list { max-height: 52vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.journal-item { border-left: 3px solid var(--jade); background: rgba(123, 162, 116, 0.07); border-radius: 0 8px 8px 0; padding: 8px 12px; }
+.journal-meta { font-size: 11.5px; opacity: 0.55; display: flex; align-items: center; gap: 6px; }
+.journal-meta .cl-del { margin-left: auto; }
+.journal-text { font-size: 14px; line-height: 1.7; margin-top: 3px; }
+
+/* ============ 對話搜尋 / 其他 ============ */
+
+.chat-search {
+  width: 100%;
+  background: var(--ink-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 7px 11px;
+  margin-bottom: 10px;
+}
+.cl-snippet { opacity: 0.55; font-size: 11.5px; }
+.check-row { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; font-size: 13px; }
+.check-row input { width: 15px; height: 15px; accent-color: var(--jade); }

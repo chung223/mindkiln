@@ -11,6 +11,30 @@ const PERSONA_CANDIDATES = ['SKILL.md', 'persona.md', 'PERSONA.md', 'skill.md', 
 const RESEARCH_DIRS = ['references/research', 'research', 'references'];
 const MAX_BYTES = 500_000;
 
+// 提示詞注入掃描:匯入的 persona 會成為系統提示的一部分,別人寫的檔案可能夾帶惡意指令。
+// 命中不阻擋(可能誤判),但要求使用者過目確認後才匯入。
+const INJECTION_PATTERNS = [
+  [/ignore\s+(?:(?:all|any|the|your|previous|above|prior|earlier)\s+)+(instructions?|prompts?|rules?)/i, '要求忽略先前指示'],
+  [/disregard\s+(?:(?:all|any|the|your|previous|above|prior|earlier)\s+)+(instructions?|prompts?|rules?)/i, '要求無視指示'],
+  [/忽略(以上|之前|先前|上面|所有|全部)(的)?(指示|指令|規則|提示詞|系統提示)/, '要求忽略指示'],
+  [/(不要|不得|禁止|絕不)(向使用者|對使用者)?(透露|提及|洩露|承認).{0,16}(系統|提示詞|指令|這段)/, '要求隱瞞系統提示'],
+  [/do\s+not\s+(reveal|mention|disclose|acknowledge)\s+(this|these|the)\s+(instructions?|prompts?)/i, '要求隱瞞指示'],
+  [/(you\s+are\s+no\s+longer|from\s+now\s+on,?\s+you\s+(are|must|will))/i, '嘗試覆寫角色'],
+  [/<script[\s>]/i, '內嵌 script 標籤'],
+  [/(fetch|curl|wget|XMLHttpRequest|axios)\s*\(?\s*['"`]?https?:\/\//i, '指示對外部網址發請求'],
+  [/(傳送|發送|上傳|回報|轉發)(使用者|對話|以下|所有)?(的)?(內容|資料|訊息|紀錄).{0,20}(http|網址|伺服器|信箱)/, '指示外傳資料'],
+  [/base64,[A-Za-z0-9+/=]{200,}/, '夾帶可疑的長 base64 內容'],
+];
+
+export function scanInjection(text) {
+  const hits = [];
+  for (const [re, label] of INJECTION_PATTERNS) {
+    const m = String(text || '').match(re);
+    if (m) hits.push(`${label}:「${m[0].slice(0, 60)}」`);
+  }
+  return hits;
+}
+
 // 只從 github.com / raw.githubusercontent.com 解析出 owner/repo,其餘一律拒絕
 function parseGithubRepo(input) {
   const s = String(input || '').trim();
@@ -114,6 +138,13 @@ export async function handleImport(req, res) {
   }
   if (!persona || persona.length < 50) {
     res.status(400).json({ error: 'persona 內容太短或抓取失敗,請確認來源是 nuwa-skill 格式' });
+    return;
+  }
+
+  // 注入掃描:別人寫的 persona 會進系統提示,可疑指令須經使用者確認
+  const warnings = scanInjection(persona);
+  if (warnings.length && !req.body?.force) {
+    res.json({ needsConfirm: true, warnings });
     return;
   }
 

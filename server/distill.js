@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { loadCorpus, corpusToPrompt } from './extract.js';
+import { loadCorpus, corpusToPrompt, extractFile, looksLikeChatExport, normalizeChatExport, corpusCharBudget } from './extract.js';
 import {
   DIMENSIONS,
   QUICK_DIMENSION_KEYS,
@@ -9,10 +9,12 @@ import {
   synthesisPrompt,
   qualityCriticPrompt,
   personaBuildPrompt,
+  timelineUpdatePrompt,
+  synthesisUpdatePrompt,
 } from './prompts.js';
 import { streamChat, describeError } from './llm.js';
 import { toTraditional, shouldForceTraditional } from './zhtw.js';
-import { getCharacter, updateCharacter, researchDir, writePersona, readConfig } from './store.js';
+import { getCharacter, updateCharacter, researchDir, writePersona, readConfig, sourcesDir, sourcesManifest } from './store.js';
 
 const PLACEHOLDER_MARK = '<!--distill-failed-->';
 
@@ -185,7 +187,7 @@ async function runRegenDimension(job, characterId, dim) {
       .filter(Boolean);
 
     await synthesizeAndBuild({ job, characterId, character, gear, lang, zh, results, checkCancelled, rDir });
-    updateCharacter(characterId, { status: 'ready', distilledAt: new Date().toISOString(), gear });
+    updateCharacter(characterId, { status: 'ready', distilledAt: new Date().toISOString(), gear, corpusManifest: sourcesManifest(characterId) });
     job.status = 'done';
     emit(job, 'done', { message: `維度「${dim.label}」已重跑並更新人物檔案。` });
   } catch (err) {
@@ -289,7 +291,7 @@ async function runPipeline(job, characterId, gear, opts = {}) {
     // Phase 2-4: 綜合提煉 → 品質閘 → persona(可重用於單維度重跑)
     await synthesizeAndBuild({ job, characterId, character, gear, lang, zh, results, checkCancelled, rDir });
 
-    updateCharacter(characterId, { status: 'ready', distilledAt: new Date().toISOString(), gear });
+    updateCharacter(characterId, { status: 'ready', distilledAt: new Date().toISOString(), gear, corpusManifest: sourcesManifest(characterId) });
     job.status = 'done';
     emit(job, 'done', { message: '蒸餾完成，可以開始對話了。' });
   } catch (err) {
@@ -297,6 +299,129 @@ async function runPipeline(job, characterId, gear, opts = {}) {
       // 人物已刪除:不可寫回 character.json(會重建目錄);cancelJobsForCharacter 已發過 error 事件
       return;
     }
+    const msg = describeError(err);
+    updateCharacter(characterId, { status: 'error', lastError: msg });
+    job.status = 'error';
+    emit(job, 'error', { message: msg });
+  }
+}
+
+// ---------- 語料增量更新(關係還在進行:丟新檔 → 時間線更新 → 綜合增修 → persona 重建) ----------
+
+// 與上次蒸餾快照比對,找出新增/變動的語料檔;無快照(舊人物)時退回 mtime > distilledAt
+export function detectNewSources(character) {
+  const cur = sourcesManifest(character.id);
+  const manifest = character.corpusManifest || null;
+  const out = [];
+  for (const [name, sig] of Object.entries(cur)) {
+    if (manifest) {
+      if (manifest[name] !== sig) out.push(name);
+    } else if (character.distilledAt) {
+      const mt = Number(sig.split(':')[1]);
+      if (mt > Date.parse(character.distilledAt)) out.push(name);
+    }
+  }
+  return out;
+}
+
+export function startIncrementalUpdate(characterId) {
+  const existing = getActiveJobForCharacter(characterId);
+  if (existing) return existing;
+  const job = makeJob(characterId);
+  runIncremental(job, characterId).catch((err) => {
+    if (job.status === 'running') {
+      job.status = 'error';
+      emit(job, 'error', { message: describeError(err) });
+    }
+  });
+  return job;
+}
+
+async function runIncremental(job, characterId) {
+  const character = getCharacter(characterId);
+  updateCharacter(characterId, { status: 'distilling', lastError: null });
+  const lang = character.outputLanguage || 'zh-Hant';
+  const trad = shouldForceTraditional(character);
+  const zh = (t) => (trad ? toTraditional(t) : t);
+  const checkCancelled = () => {
+    if (job.cancelled) { const e = new Error('cancelled'); e.cancelled = true; throw e; }
+  };
+  const rDir = researchDir(characterId);
+
+  try {
+    const synthP = path.join(rDir, 'synthesis.md');
+    if (!fs.existsSync(synthP)) throw new Error('找不到既有綜合報告——請先完成一次完整蒸餾,之後才能增量更新。');
+
+    emit(job, 'phase', { phase: 'corpus', label: '載入新語料' });
+    const newNames = detectNewSources(character);
+    if (!newNames.length) throw new Error('沒有偵測到新的語料檔案。把新文件放進 sources 後再試。');
+    const budget = Math.floor(corpusCharBudget() / 2); // 增量只吃新檔,預算取一半保守值
+    const docs = [];
+    for (const name of newNames) {
+      let text;
+      try { text = await extractFile(path.join(sourcesDir(characterId), name)); } catch { continue; }
+      if (!text || !text.trim()) continue;
+      if (looksLikeChatExport(text)) text = normalizeChatExport(text);
+      docs.push({ name, text: text.trim() });
+    }
+    if (!docs.length) throw new Error('新檔案無法解析或內容為空。');
+    let total = docs.reduce((s, d) => s + d.text.length, 0);
+    const truncated = total > budget;
+    if (truncated) {
+      const ratio = budget / total;
+      for (const d of docs) d.text = d.text.slice(0, Math.max(2000, Math.floor(d.text.length * ratio)));
+      total = docs.reduce((s, d) => s + d.text.length, 0);
+    }
+    emit(job, 'corpus', { files: docs.map((d) => ({ name: d.name, chars: d.text.length })), skipped: [], totalChars: total, truncated });
+    const newCorpusBlock = docs.map((d) => `<document filename="${d.name}">\n${d.text}\n</document>`).join('\n\n');
+    const tlP = path.join(rDir, '06-timeline.md');
+    const oldTimeline = fs.existsSync(tlP) ? fs.readFileSync(tlP, 'utf8') : '(尚無時間線)';
+    const oldSynth = fs.readFileSync(synthP, 'utf8');
+    checkCancelled();
+
+    // 1) 時間線更新
+    emit(job, 'phase', { phase: 'research', label: '時間線增量更新' });
+    emit(job, 'dimension', { key: '06-timeline', label: '人物時間線', state: 'start' });
+    const tl = await streamChat({
+      system: [{ type: 'text', text: timelineUpdatePrompt(character.name, lang) }],
+      messages: [{ role: 'user', content: `【既有時間線】\n${oldTimeline}\n\n【新加入的語料】\n${newCorpusBlock}\n\n請輸出完整的更新版時間線。` }],
+      maxTokens: 16000,
+    });
+    checkCancelled();
+    const newTimeline = zh(tl.text);
+    fs.writeFileSync(tlP, newTimeline);
+    emit(job, 'dimension', { key: '06-timeline', label: '人物時間線', state: 'done', chars: newTimeline.length });
+
+    // 2) 綜合報告增修
+    emit(job, 'phase', { phase: 'synthesis', label: '綜合報告增修' });
+    const sy = await streamChat({
+      system: [{ type: 'text', text: synthesisUpdatePrompt(character.name, lang) }],
+      messages: [{ role: 'user', content: `【既有綜合報告】\n${oldSynth}\n\n【更新後的時間線】\n${newTimeline}\n\n【新加入的語料】\n${newCorpusBlock}\n\n請輸出完整的更新版綜合報告。` }],
+      maxTokens: 24000,
+    });
+    checkCancelled();
+    const synthText = zh(sy.text);
+    fs.writeFileSync(synthP, synthText);
+    emit(job, 'synthesis', { chars: synthText.length });
+
+    // 3) persona 重建(writePersona 會自動快照舊版到 versions/)
+    emit(job, 'phase', { phase: 'build', label: '重建人物檔案 persona.md' });
+    const persona = await streamChat({
+      system: personaBuildPrompt(character.name, lang),
+      messages: [{ role: 'user', content: `以下是「${character.name}」的思維框架綜合報告,請組裝為 persona.md:\n\n${synthText}` }],
+      maxTokens: 32000,
+    });
+    checkCancelled();
+    let personaText = zh(persona.text.trim());
+    personaText = personaText.replace(/^```(?:markdown)?\n([\s\S]*)\n```$/m, '$1').trim();
+    const stamp = `\n\n---\n> 本檔案由女媧蒸餾管線生成(方法論:[nuwa-skill](https://github.com/alchaincyf/nuwa-skill))\n> 最近一次為增量更新:${new Date().toISOString().slice(0, 10)}(新增 ${docs.length} 份語料)\n`;
+    writePersona(characterId, personaText + stamp);
+
+    updateCharacter(characterId, { status: 'ready', distilledAt: new Date().toISOString(), corpusManifest: sourcesManifest(characterId) });
+    job.status = 'done';
+    emit(job, 'done', { message: `增量更新完成:時間線與人物檔案已依 ${docs.length} 份新語料更新。` });
+  } catch (err) {
+    if (err.cancelled) return;
     const msg = describeError(err);
     updateCharacter(characterId, { status: 'error', lastError: msg });
     job.status = 'error';

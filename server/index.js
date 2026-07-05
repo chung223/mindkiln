@@ -2,6 +2,7 @@ import './env.js'; // 必須最先執行:載入 .env,讓下方 store.js 讀得�
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
+import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { fileURLToPath } from 'url';
 import {
@@ -12,13 +13,15 @@ import {
   listPersonaVersions, readPersonaVersion,
   readMemory, writeMemory,
   readPredictions, writePredictions,
+  readJournal, writeJournal,
   listChats, createChat, getChat, deleteChat,
   listCouncils, createCouncil, getCouncil, deleteCouncil,
 } from './store.js';
 import { handleCouncilMessage } from './council.js';
-import { startDistillation, regenerateDimension, getJob, getActiveJobForCharacter, subscribe, cancelJobsForCharacter } from './distill.js';
-import { handleMessage, handleSessionReview, handleMemoryUpdate } from './chat.js';
+import { startDistillation, regenerateDimension, startIncrementalUpdate, detectNewSources, getJob, getActiveJobForCharacter, subscribe, cancelJobsForCharacter } from './distill.js';
+import { handleMessage, handleSessionReview, handleMemoryUpdate, handleABPreview, handleABCommit, handleJournalSuggest } from './chat.js';
 import { handleImport } from './import.js';
+import { computeAnalytics, computeEmotionalArc } from './analytics.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
 import { normalizeAliases, SUBJECT_TYPES, OUTPUT_LANGUAGES } from './store.js';
 import { detectSpeakersForCharacter, estimateDistillation } from './extract.js';
@@ -48,6 +51,40 @@ app.use((req, res, next) => {
   next();
 });
 
+// 密碼驗證(選用):設 NUWA_PASSWORD 環境變數即啟用。對外(通道/區網)部署時務必開啟。
+// 驗證方式:HMAC(密碼) 作為 HttpOnly cookie;未設密碼時(本機預設)完全不啟用。
+const AUTH_PASSWORD = process.env.NUWA_PASSWORD || '';
+const AUTH_TOKEN = AUTH_PASSWORD
+  ? crypto.createHmac('sha256', AUTH_PASSWORD).update('nuwa-session-v1').digest('hex')
+  : null;
+const safeEqual = (a, b) => {
+  const ba = Buffer.from(String(a)), bb = Buffer.from(String(b));
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+};
+app.use((req, res, next) => {
+  if (!AUTH_TOKEN) return next();
+  // 用小寫比對:Express 路由預設不分大小寫,守衛必須跟路由一致,否則 /API/... 可繞過驗證
+  const p = req.path.toLowerCase();
+  if (!p.startsWith('/api/') || p === '/api/login') return next();
+  const cookie = (req.get('cookie') || '')
+    .split(';').map((s) => s.trim())
+    .find((s) => s.startsWith('nuwa_auth='));
+  const val = cookie ? cookie.slice('nuwa_auth='.length) : '';
+  if (val && safeEqual(val, AUTH_TOKEN)) return next();
+  res.status(401).json({ error: '需要登入' });
+});
+
+app.post('/api/login', (req, res) => {
+  if (!AUTH_TOKEN) { res.json({ ok: true, noauth: true }); return; }
+  const { password } = req.body || {};
+  if (typeof password !== 'string' || !safeEqual(password, AUTH_PASSWORD)) {
+    res.status(401).json({ error: '密碼錯誤' });
+    return;
+  }
+  res.setHeader('Set-Cookie', `nuwa_auth=${AUTH_TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+  res.json({ ok: true });
+});
+
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 const wrap = (fn) => async (req, res) => {
@@ -56,6 +93,11 @@ const wrap = (fn) => async (req, res) => {
   } catch (err) {
     if (err.code === 'ENOENT') {
       if (!res.headersSent) res.status(404).json({ error: '找不到資源' });
+      return;
+    }
+    if (err.status) {
+      // 帶狀態碼的使用者條件錯誤(如「沒有可分析的內容」):不是伺服器故障,不進 error log
+      if (!res.headersSent) res.status(err.status).json({ error: err.message });
       return;
     }
     console.error(err);
@@ -143,6 +185,7 @@ app.get('/api/characters/:id', wrap((req, res) => {
     hasPersona: Boolean(readPersona(meta.id)),
     research: listResearch(meta.id),
     activeJobId: getActiveJobForCharacter(meta.id)?.id || null,
+    pendingSources: meta.status === 'ready' ? detectNewSources(meta) : [], // 蒸餾後新增/變動的語料檔
   });
 }));
 
@@ -155,6 +198,7 @@ app.patch('/api/characters/:id', wrap((req, res) => {
   if (subjectType !== undefined && SUBJECT_TYPES.includes(subjectType)) patch.subjectType = subjectType;
   if (consentAck !== undefined) patch.consentAck = Boolean(consentAck);
   if (outputLanguage !== undefined && OUTPUT_LANGUAGES.includes(outputLanguage)) patch.outputLanguage = outputLanguage;
+  if (req.body?.autoMemory !== undefined) patch.autoMemory = Boolean(req.body.autoMemory);
   res.json(updateCharacter(req.params.id, patch));
 }));
 
@@ -326,6 +370,87 @@ app.put('/api/characters/:id/memory', wrap((req, res) => {
 
 app.post('/api/characters/:id/chats/:chatId/remember', wrap(handleMemoryUpdate));
 
+// A/B 排練:同一脈絡兩種說法並行預覽(不落盤)→ 採用其一才落盤
+app.post('/api/characters/:id/chats/:chatId/ab', wrap(handleABPreview));
+app.post('/api/characters/:id/chats/:chatId/ab-commit', wrap(handleABCommit));
+
+// 關係儀表板:純計算統計(零模型成本)+ 情感弧線(一次呼叫,落盤快取)
+app.get('/api/characters/:id/analytics', wrap(async (req, res) => {
+  res.json(await computeAnalytics(req.params.id));
+}));
+app.post('/api/characters/:id/analytics/arc', wrap(async (req, res) => {
+  res.json(await computeEmotionalArc(req.params.id));
+}));
+
+// 語料增量更新(關係還在進行:丟新檔 → 時間線/綜合/persona 跟著演進)
+app.post('/api/characters/:id/distill-incremental', wrap((req, res) => {
+  const meta = getCharacter(req.params.id);
+  // 先在路由層擋掉「沒有新檔」,避免白開一個工作、把人物狀態打成 error
+  if (!detectNewSources(meta).length) {
+    res.status(400).json({ error: '沒有偵測到新的語料檔案。把新文件放進 sources 後再試。' });
+    return;
+  }
+  const job = startIncrementalUpdate(req.params.id);
+  res.json({ jobId: job.id });
+}));
+
+// 對話全文搜尋
+app.get('/api/characters/:id/chat-search', wrap((req, res) => {
+  const id = req.params.id;
+  getCharacter(id);
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (!q) { res.json([]); return; }
+  const out = [];
+  for (const c of listChats(id)) {
+    let chat;
+    try { chat = getChat(id, c.id); } catch { continue; }
+    let snippet = null;
+    if ((chat.title || '').toLowerCase().includes(q)) snippet = chat.title;
+    else {
+      for (const m of chat.messages || []) {
+        const t = String(m.content || '');
+        const i = t.toLowerCase().indexOf(q);
+        if (i >= 0) {
+          const s = Math.max(0, i - 30);
+          snippet = (s > 0 ? '…' : '') + t.slice(s, i + q.length + 40).replace(/\n/g, ' ') + '…';
+          break;
+        }
+      }
+    }
+    if (snippet) {
+      out.push({ chatId: chat.id, title: chat.title, mode: chat.mode, snippet });
+      if (out.length >= 30) break;
+    }
+  }
+  res.json(out);
+}));
+
+// 成長日誌(全域:記錄使用者自己的變化)
+app.get('/api/journal', (req, res) => {
+  res.json(readJournal());
+});
+app.post('/api/journal', wrap((req, res) => {
+  const { text, characterId, characterName, mode } = req.body || {};
+  if (!text || !text.trim()) { res.status(400).json({ error: '內容不可為空' }); return; }
+  const arr = readJournal();
+  const rec = {
+    id: `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    at: new Date().toISOString(),
+    text: String(text).trim().slice(0, 2000),
+    characterId: String(characterId || '').slice(0, 200),
+    characterName: String(characterName || '').slice(0, 200),
+    mode: String(mode || '').slice(0, 50),
+  };
+  arr.unshift(rec);
+  writeJournal(arr);
+  res.json(rec);
+}));
+app.delete('/api/journal/:jid', wrap((req, res) => {
+  writeJournal(readJournal().filter((r) => r.id !== req.params.jid));
+  res.json({ ok: true });
+}));
+app.post('/api/characters/:id/chats/:chatId/journal-suggest', wrap(handleJournalSuggest));
+
 // 可驗證預測:存下預測 → 事後回填實際結果 → 累積此人物的準度
 app.get('/api/characters/:id/predictions', wrap((req, res) => {
   getCharacter(req.params.id);
@@ -343,8 +468,8 @@ app.post('/api/characters/:id/predictions', wrap((req, res) => {
   const rec = {
     id: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     at: new Date().toISOString(),
-    situation: (situation || '').trim(),
-    prediction: prediction.trim(),
+    situation: (situation || '').trim().slice(0, 2000),
+    prediction: prediction.trim().slice(0, 4000),
     outcome: '',
     verdict: '', // '' | hit | miss | partial
   };
@@ -362,7 +487,7 @@ app.patch('/api/characters/:id/predictions/:pid', wrap((req, res) => {
     return;
   }
   const { outcome, verdict } = req.body || {};
-  if (outcome !== undefined) rec.outcome = String(outcome);
+  if (outcome !== undefined) rec.outcome = String(outcome).slice(0, 2000);
   if (verdict !== undefined && ['', 'hit', 'miss', 'partial'].includes(verdict)) rec.verdict = verdict;
   writePredictions(req.params.id, arr);
   res.json(rec);
@@ -437,7 +562,7 @@ app.post('/api/councils', wrap((req, res) => {
     }
     participants.push({ id: c.id, name: c.name });
   }
-  res.json(createCouncil({ title, participants }));
+  res.json(createCouncil({ title, participants, moderator: req.body?.moderator !== false }));
 }));
 
 app.get('/api/councils/:id', wrap((req, res) => {

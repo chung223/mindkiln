@@ -1,4 +1,4 @@
-import { chatSystemBlocks } from './prompts.js';
+import { chatSystemBlocks, councilModeratorPrompt } from './prompts.js';
 import { streamChat, describeError } from './llm.js';
 import { getCharacter, getCouncil, writeCouncil, readPersona } from './store.js';
 import { toTraditional, shouldForceTraditional, makeStreamConverter } from './zhtw.js';
@@ -122,6 +122,46 @@ export async function handleCouncilMessage(req, res) {
         }
       } catch (err) {
         if (!aborted) send('persona_error', { personaId: member.id, message: describeError(err) });
+      }
+    }
+
+    // 主持人總結:全員發言後,中立收斂共識/分歧/盲點(可於建立議事會時關閉)
+    if (!aborted && council.moderator !== false && produced.length >= 2) {
+      send('persona_start', { personaId: '__moderator', name: '主持人' });
+      const modTrad = members.some((m) => shouldForceTraditional(m.character));
+      const modConv = modTrad
+        ? makeStreamConverter((chunk) => { if (!aborted && chunk) send('delta', { personaId: '__moderator', text: chunk }); })
+        : null;
+      try {
+        const result = await streamChat({
+          system: [{ type: 'text', text: councilModeratorPrompt() }],
+          messages: [{
+            role: 'user',
+            content: `使用者的問題:${content.trim()}\n\n本輪發言:\n\n${produced.map((p) => `[${p.personaName}]:\n${p.content}`).join('\n\n')}`,
+          }],
+          maxTokens: 2000,
+          signal: ctrl.signal,
+          onDelta: (d) => {
+            if (aborted) return;
+            if (modConv) modConv.push(d);
+            else send('delta', { personaId: '__moderator', text: d });
+          },
+        });
+        if (modConv) modConv.flush();
+        if (!aborted) {
+          const summary = modTrad ? toTraditional(result.text) : result.text;
+          if (summary.trim()) {
+            const msg = {
+              role: 'moderator', personaId: '__moderator', personaName: '主持人',
+              content: summary, at: new Date().toISOString(),
+            };
+            transcript.push(msg);
+            produced.push(msg);
+            send('persona_done', { personaId: '__moderator' });
+          }
+        }
+      } catch (err) {
+        if (!aborted) send('persona_error', { personaId: '__moderator', message: describeError(err) });
       }
     }
 

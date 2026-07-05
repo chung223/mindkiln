@@ -195,6 +195,79 @@ export function normalizeChatExport(text) {
   return out.join('\n');
 }
 
+// ---------- 結構化聊天事件(供關係儀表板統計:日期 + 時刻 + 發言者) ----------
+
+// 中文 12 小時制 → 24 小時(晚上9→21、凌晨12→0;無時段詞視為 24 小時制原樣)
+function toHour24(meridiem, h) {
+  if (h > 23) return null;
+  if (!meridiem) return h;
+  const base = h % 12;
+  if (/凌晨|清晨|早上|上午|AM/i.test(meridiem)) return base;
+  if (/中午/.test(meridiem)) return h === 12 ? 12 : base + 12;
+  return base + 12; // 下午 / 傍晚 / 晚上 / 夜間 / PM
+}
+
+// 含時刻捕捉的行首樣式(與 CHAT_LINE_PATTERNS 對應,但把時間也抓出來)
+const T_IOS = new RegExp(`^\\[?(\\d{4})[/.\\-](\\d{1,2})[/.\\-](\\d{1,2})[,\\s]+(${MERIDIEM})?\\s*(\\d{1,2}):(\\d{2})(?::\\d{2})?\\s*(${MERIDIEM})?\\]?\\s*[-–]?\\s*([^:：]{1,40})[:：]\\s*(.*)$`);
+// 訊息尾段設為可選:LINE 的收回訊息行只有「時間\t名字已收回訊息」單一 tab 欄位
+const T_TAB = new RegExp(`^\\s*(${MERIDIEM})?\\s*(\\d{1,2}):(\\d{2})\\t([^\\t]{1,40})(?:\\t(.*))?$`);
+const T_SPACE = new RegExp(`^\\s*(${MERIDIEM})?\\s*(\\d{1,2}):(\\d{2})(?::\\d{2})?\\s+(\\S.*)$`);
+
+/**
+ * 把一份聊天匯出解析成事件陣列:{ date:'YYYY/M/D'|null, hour:0-23|null, speaker, text, media }
+ * 支援 iOS/WhatsApp 內嵌日期、tab 分隔 LINE、空格分隔 LINE(沿用偵測到的發言者名字表)。
+ * 續行會併入上一則的 text。媒體/貼圖佔位符保留為事件(media:true,text 空)——它們仍代表互動。
+ */
+export function parseChatEvents(text) {
+  const events = [];
+  const spaceSpeakers = detectSpaceLineExport(text);
+  let currentDate = null;
+  const push = (speaker, msg, hour) => {
+    let sp = speaker.trim();
+    let media = !msg || MEDIA_ONLY.test(msg);
+    // LINE 收回訊息常黏在發言者後(「某某已收回訊息」):歸回原發言者並視為媒體事件
+    const recall = sp.match(/^(.*?)(?:已收回訊息|收回了訊息)$/);
+    if (recall) {
+      sp = recall[1].trim();
+      if (!sp) return; // 純「已收回訊息」行,無從歸屬
+      media = true;
+      msg = '';
+    }
+    events.push({ date: currentDate, hour, speaker: sp, text: media ? '' : msg.trim(), media });
+  };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = stripInvisible(raw).trimEnd();
+    if (!line.trim()) continue;
+    const dh = line.match(DATE_HEADER);
+    if (dh) { currentDate = `${dh[1]}/${Number(dh[2])}/${Number(dh[3])}`; continue; }
+    if (CHAT_NOISE.some((re) => re.test(line))) continue;
+    let m;
+    if ((m = line.match(T_IOS))) {
+      currentDate = `${m[1]}/${Number(m[2])}/${Number(m[3])}`;
+      push(m[8], m[9] || '', toHour24(m[4] || m[7], Number(m[5])));
+      continue;
+    }
+    if (!line.includes('\t') && spaceSpeakers) {
+      const sm = line.match(T_SPACE);
+      if (sm) {
+        const tokens = sm[4].split(/\s+/).filter(Boolean);
+        if (tokens.length) {
+          const nameLen = Math.min(spaceSpeakers.get(tokens[0]) || 1, tokens.length);
+          push(tokens.slice(0, nameLen).join(' '), tokens.slice(nameLen).join(' '), toHour24(sm[1], Number(sm[2])));
+          continue;
+        }
+      }
+    }
+    if ((m = line.match(T_TAB))) {
+      push(m[4], m[5] || '', toHour24(m[1], Number(m[2])));
+      continue;
+    }
+    // 續行:併入上一則(供長度統計)
+    if (events.length && !events[events.length - 1].media) events[events.length - 1].text += `\n${line.trim()}`;
+  }
+  return events;
+}
+
 // 從語料掃出候選發言者(標籤 + @帳號),依出現頻率排序。
 // minCount 用來過濾雜訊;跨多檔聚合時應傳 1,待聚合後再一次過濾。
 export function detectSpeakers(text, minCount = 2) {
