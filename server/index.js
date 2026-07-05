@@ -22,6 +22,7 @@ import { startDistillation, regenerateDimension, startIncrementalUpdate, detectN
 import { handleMessage, handleSessionReview, handleMemoryUpdate, handleABPreview, handleABCommit, handleJournalSuggest } from './chat.js';
 import { handleImport } from './import.js';
 import { computeAnalytics, computeEmotionalArc } from './analytics.js';
+import { startEvolution, readEvolutionState } from './evolve.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_BASE_URL, DEFAULT_COMPAT_BASE_URL, DEFAULT_COMPAT_MODEL } from './llm.js';
 import { normalizeAliases, SUBJECT_TYPES, OUTPUT_LANGUAGES } from './store.js';
 import { detectSpeakersForCharacter, estimateDistillation } from './extract.js';
@@ -392,6 +393,23 @@ app.post('/api/characters/:id/distill-incremental', wrap((req, res) => {
   }
   const job = startIncrementalUpdate(req.params.id);
   res.json({ jobId: job.id });
+}));
+
+// persona 演化(達爾文迴圈):mode=score 只體檢;mode=evolve 完整一輪(棘輪保留/回滾)
+app.post('/api/characters/:id/evolve', wrap((req, res) => {
+  getCharacter(req.params.id);
+  if (!readPersona(req.params.id)) {
+    res.status(400).json({ error: '尚未蒸餾,沒有 persona 可以評分或演化。' });
+    return;
+  }
+  const mode = req.body?.mode === 'score' ? 'score' : 'evolve';
+  const job = startEvolution(req.params.id, mode);
+  res.json({ jobId: job.id });
+}));
+
+app.get('/api/characters/:id/evolution', wrap((req, res) => {
+  getCharacter(req.params.id);
+  res.json(readEvolutionState(req.params.id));
 }));
 
 // 對話全文搜尋

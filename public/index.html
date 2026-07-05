@@ -151,6 +151,9 @@
           <div class="panel-actions">
             <button class="btn btn-primary btn-small" id="btn-edit-persona">檢視 / 編輯 persona.md</button>
             <button class="btn btn-ghost btn-small" id="btn-view-memory">跨對話記憶</button>
+            <button class="btn btn-ghost btn-small" id="btn-evolve-score" title="獨立評分者對照調研檔 + 探針測試,給 persona 打分(約 7 次呼叫)">🧪 體檢評分</button>
+            <button class="btn btn-ghost btn-small" id="btn-evolve-run" title="達爾文迴圈:評分 → 只改最弱維度 → 複評 → 有進步才保留,否則自動回滾(約 14 次呼叫)">🧬 演化一輪</button>
+            <button class="btn btn-ghost btn-small" id="btn-evolve-log">演化紀錄</button>
             <button class="btn btn-outline btn-small" id="btn-incremental" hidden>⟳ 增量更新</button>
           </div>
         </div>
@@ -422,6 +425,15 @@
       <button type="submit" class="btn btn-primary">開始</button>
     </div>
   </form>
+</dialog>
+
+<!-- persona 演化(評分卡 + 紀錄) -->
+<dialog id="modal-evolution" class="modal-wide">
+  <div class="modal-form">
+    <h3>persona 演化<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
+    <p class="hint">達爾文迴圈:獨立評分者打分 → 只針對最弱維度定向改寫 → 複評 → <b>總分有進步才保留,否則自動回滾</b>(舊版永遠在版本歷史裡)。評分含探針行為測試與預測落空回饋,不是自我感覺良好。</p>
+    <div id="evolution-body"></div>
+  </div>
 </dialog>
 
 <!-- A/B 排練比較 -->

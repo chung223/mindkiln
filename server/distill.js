@@ -45,7 +45,7 @@ function extractJson(text) {
 
 const jobs = new Map(); // jobId -> job
 
-function makeJob(characterId) {
+export function makeJob(characterId) {
   const job = {
     id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     characterId,
@@ -58,7 +58,7 @@ function makeJob(characterId) {
   return job;
 }
 
-function emit(job, type, data = {}) {
+export function emit(job, type, data = {}) {
   const evt = { type, time: Date.now(), ...data };
   job.events.push(evt);
   for (const fn of job.listeners) fn(evt);

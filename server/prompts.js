@@ -582,6 +582,56 @@ export function journalSuggestPrompt(characterName) {
   return `你是溫柔而誠實的反思陪伴者。閱讀使用者與「${characterName}」的這段對話,以**使用者的第一人稱**寫 1–2 句「成長日誌」——他今天看清了什麼、放下了什麼、或往前走了哪一步。具體、誠實、不雞湯、不美化。只輸出那 1–2 句,不要引號或前言。`;
 }
 
+// ---------- persona 演化(達爾文迴圈:評分 → 單維度改寫 → 複評 → 只保留有進步的) ----------
+
+// 出題者:從調研檔生成固定探針問題(行為測試,演化前後各跑一遍比對忠實度)
+export function probeGenPrompt(characterName) {
+  return `你是「${characterName}」persona 的測試出題者。根據調研檔案,設計 5 個「探針問題」——之後會拿去問運行中的 persona,檢驗它是否忠實於本人。
+
+出題原則(每類至少一題):
+1. 表達DNA:一個日常問題,答案的「說話方式」應顯出此人的句式/詞彙/節奏指紋。
+2. 心智模型應用:一個此人沒直接談過、但其核心心智模型能推出立場的新情境。
+3. 已知立場:調研檔中有明確一手證據的話題,答案不應與證據矛盾。
+4. 誠實邊界:一個語料完全沒涵蓋的問題,好的 persona 應以此人的方式表達不確定,而非編造。
+5. 情緒壓力:一個情緒張力高的問題,檢驗反應模式是否符合調研檔中的行為模式。
+
+每題附「expect」:評分者該檢查什麼(引用調研檔的具體證據,說明怎樣算忠實、怎樣算失真)。
+
+只輸出嚴格 JSON:
+{ "probes": [ { "q": "問題", "expect": "評分者檢查要點(附證據)" } ] }`;
+}
+
+// 評分者:對照調研檔 + 探針表現 + 預測落空紀錄,嚴格打分(與改寫者分離,防自我感覺良好)
+export function personaScorecardPrompt(characterName) {
+  return `你是「${characterName}」persona 的獨立稽核評分者。你會收到:persona 檔案、調研檔案、探針測試逐字稿(問題/persona 的回答/檢查要點)、以及(若有)預測落空紀錄。你的職責是嚴格評分——你不是寫這份 persona 的人,不要客氣。
+
+六個維度(各 0–100,寧嚴勿鬆):
+1. quoteFidelity 引語可溯源:persona 中每句引語都能在調研檔找到;有任何查無出處的引語,此維不得超過 40。
+2. exclusivity 排他性:心智模型是此人獨特的,不是通用道理包裝。
+3. tension 內在張力:矛盾被保留而非調和,且有證據支撐。
+4. expressionDNA 表達DNA可執行度:規則具體到「照著做就能像」;含糊詞(「適當地」「視情況」)扣分。
+5. honesty 誠實邊界:局限具體、可操作,不是「不能替代本人」式空話。
+6. probeFidelity 探針表現:逐題對照 expect 檢查回答——說話方式像不像、立場是否與證據矛盾、超出語料時是否誠實、有沒有編造。這一維只看探針逐字稿,不看 persona 寫得多漂亮。
+
+criticisms:針對分數最低的維度,給 2–4 條可直接照做的具體修改指示(引用證據,指出改哪裡、怎麼改)。
+
+只輸出嚴格 JSON:
+{ "scores": { "quoteFidelity": 0, "exclusivity": 0, "tension": 0, "expressionDNA": 0, "honesty": 0, "probeFidelity": 0 }, "criticisms": ["..."] }`;
+}
+
+// 改寫者:只針對最弱維度做定向改寫(單維度防灌分;與評分者分離)
+export function personaEvolvePrompt(characterName, dimensionLabel, outputLanguage) {
+  return `你是「${characterName}」persona 的演化改寫者。獨立評分者判定目前最弱的維度是:「${dimensionLabel}」,並給了具體批評(見使用者訊息)。你的任務:輸出完整的改良版 persona(整份,保持原有章節結構)。
+
+鐵則:
+- **只針對「${dimensionLabel}」做定向改良**,其他部分除非為了一致性,否則原樣保留——不要順手大改,那會讓比對失效。
+- **引語鐵則:不得新增任何調研檔中不存在的引語。**只能沿用、刪除或重組 persona 中既有的引語;需要新證據時,只能從調研檔原文摘取。查無出處的金句寧可不用。
+- 改良要依評分者的批評逐條落實,不是重寫一份你自己喜歡的版本。
+- 資訊不足時如實標註,寧可誠實的低分也不要編造的高分。
+${languageDirective(outputLanguage)}
+只輸出 persona 檔案本身(Markdown),不要有任何前言或說明。`;
+}
+
 // 記憶更新:把一段對話裡「值得跨對話記住」的事,合併進既有記憶(整份重寫,去重、精簡)
 export function memoryUpdatePrompt(characterName) {
   return `你在維護「${characterName}」對使用者的長期記憶——一份會被注入未來每一場對話的筆記,好讓「${characterName}」記得使用者是誰、你們之間發生過什麼。

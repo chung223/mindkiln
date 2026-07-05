@@ -1023,3 +1023,15 @@ dialog::backdrop { background: rgba(10, 8, 6, 0.72); backdrop-filter: blur(3px);
 .cl-snippet { opacity: 0.55; font-size: 11.5px; }
 .check-row { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; font-size: 13px; }
 .check-row input { width: 15px; height: 15px; accent-color: var(--jade); }
+
+/* ============ persona 演化 ============ */
+
+.evo-total { font-size: 15px; margin: 6px 0 10px; }
+.evo-total b { color: var(--gold); font-size: 22px; }
+.evo-table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-bottom: 10px; }
+.evo-table th, .evo-table td { border: 1px solid var(--line); padding: 5px 8px; text-align: center; }
+.evo-table th { opacity: 0.65; font-weight: normal; letter-spacing: 1px; }
+.evo-table td { color: var(--gold); font-size: 15px; }
+.evo-round { border-left: 3px solid var(--line); padding: 6px 12px; margin: 6px 0; font-size: 13.5px; }
+.evo-round.kept { border-left-color: var(--jade); }
+.evo-round.reverted { border-left-color: var(--cinnabar-bright); opacity: 0.8; }

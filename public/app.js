@@ -1341,6 +1341,49 @@ function bind() {
     }
   });
 
+  // persona 演化(達爾文迴圈)
+  const startEvolve = async (mode) => {
+    const msg = mode === 'score'
+      ? '對 persona 做一次體檢評分?(探針測試 + 獨立評分,約 7 次模型呼叫)'
+      : '跑一輪演化?(評分 → 只改最弱維度 → 複評 → 有進步才保留,約 14 次模型呼叫;舊版自動存入版本歷史)';
+    if (!confirm(msg)) return;
+    try {
+      const { jobId } = await api(`/api/characters/${encodeURIComponent(state.current.id)}/evolve`, {
+        method: 'POST', body: { mode },
+      });
+      attachJobStream(jobId);
+      toast(mode === 'score' ? '體檢開始,進度看下方爐火' : '演化開始,進度看下方爐火');
+    } catch (err) { toast(err.message, true); }
+  };
+  $('#btn-evolve-score').addEventListener('click', () => startEvolve('score'));
+  $('#btn-evolve-run').addEventListener('click', () => startEvolve('evolve'));
+  $('#btn-evolve-log').addEventListener('click', async () => {
+    try {
+      const st = await api(`/api/characters/${encodeURIComponent(state.current.id)}/evolution`);
+      const L = st.dimLabels;
+      const scoreTable = (scores) => `<table class="evo-table"><tr>${Object.keys(scores).map((k) => `<th>${esc(L[k] || k)}</th>`).join('')}</tr><tr>${Object.values(scores).map((v) => `<td>${v}</td>`).join('')}</tr></table>`;
+      let html = '';
+      if (st.scorecard) {
+        html += `<h4>最新評分卡(${esc(new Date(st.scorecard.at).toLocaleString('zh-TW'))})</h4>
+          <div class="evo-total">總分 <b>${st.scorecard.total}</b> / 100｜最弱:${esc(L[st.scorecard.weakest] || st.scorecard.weakest)}</div>
+          ${scoreTable(st.scorecard.scores)}
+          ${st.scorecard.criticisms?.length ? `<h4>評分者的具體批評</h4><ul class="dash-turns">${st.scorecard.criticisms.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : ''}`;
+      } else {
+        html += '<p class="muted">還沒有評分卡——先按「🧪 體檢評分」。</p>';
+      }
+      if (st.rounds.length) {
+        html += `<h4>演化歷史(${st.rounds.length} 輪)</h4>` + st.rounds.map((r) =>
+          `<div class="evo-round ${r.kept ? 'kept' : 'reverted'}">
+            <b>${r.kept ? '✓ 保留' : '↩ 回滾'}</b> ${esc(new Date(r.at).toLocaleString('zh-TW'))}
+            ・針對「${esc(r.dimensionLabel)}」・總分 ${r.before.total} → ${r.after.total}
+          </div>`).join('');
+      }
+      html += `<p class="hint">探針題庫:${st.probes ? `${st.probes} 題(固定,演化前後同一套)` : '尚未生成(第一次體檢時自動出題)'}。人手檢查點:每輪演化後可到「版本歷史」比對前後差異。</p>`;
+      $('#evolution-body').innerHTML = html;
+      $('#modal-evolution').showModal();
+    } catch (err) { toast(err.message, true); }
+  });
+
   // 語料增量更新
   $('#btn-incremental').addEventListener('click', async () => {
     if (!confirm('用新語料做增量更新?會更新時間線、綜合報告與 persona(舊版會自動存入版本歷史)。')) return;
