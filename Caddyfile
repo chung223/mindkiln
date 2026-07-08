@@ -1,0 +1,7 @@
+# Caddy 反向代理:自動申請 / 續期 HTTPS 憑證(Let's Encrypt)。
+# {$DOMAIN} 來自 docker-compose 傳入的環境變數。
+
+{$DOMAIN} {
+	reverse_proxy app:5723
+	encode zstd gzip
+}

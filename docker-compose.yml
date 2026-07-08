@@ -1,0 +1,45 @@
+# 一鍵部署到 VPS:女媧工坊 + Caddy 反向代理(自動 HTTPS)。
+#
+#   1. 把網域的 A 記錄指向這台 VPS 的 IP。
+#   2. 複製 .env.example 成 .env,至少填 DOMAIN 與 NUWA_PASSWORD(建議也填 ANTHROPIC_API_KEY)。
+#   3. docker compose up -d --build
+#   4. 開 https://你的網域 —— Caddy 會自動申請並續期 Let's Encrypt 憑證。
+#
+# app 只在內部網路開放(expose,不對外);唯一對外的是 Caddy 的 80/443。
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      # 登入密碼:未設定就會被擋下(避免不小心開放無密碼的公開站)
+      NUWA_PASSWORD: ${NUWA_PASSWORD:?請在 .env 設定 NUWA_PASSWORD}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      NUWA_DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: "5723"
+    volumes:
+      - nuwa-data:/data
+    expose:
+      - "5723" # 僅供內部網路(Caddy)存取,不發佈到主機
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?請在 .env 設定 DOMAIN(例:nuwa.example.com)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # 憑證存這裡,重建容器也不會重新申請
+      - caddy-config:/config
+
+volumes:
+  nuwa-data:
+  caddy-data:
+  caddy-config:

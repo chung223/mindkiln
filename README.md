@@ -49,6 +49,29 @@ docker run -p 5723:5723 -v ~/nuwa-data:/data mindkiln
 
 密碼以 scrypt 雜湊存於 `data/config.json`(不存明文),工作階段用 HttpOnly cookie 維持,並對登入嘗試做節流。務必搭配 HTTPS(由前面的反向代理 / 平台終結 TLS),cookie 才會帶上 `Secure`。
 
+### 一鍵部署到 VPS(docker compose + 自動 HTTPS)
+
+專案內含 `docker-compose.yml` 與 `Caddyfile`,用 [Caddy](https://caddyserver.com/) 反向代理自動申請 / 續期 Let's Encrypt 憑證,讓你在 VPS 上幾個步驟就上線:
+
+```bash
+# 0) 先把網域的 A 記錄指向這台 VPS 的 IP(例:nuwa.example.com → 203.0.113.10)
+# 1) VPS 上安裝 Docker(含 compose 外掛),然後取得程式碼
+git clone https://github.com/chung223/mindkiln.git && cd mindkiln
+
+# 2) 建立 .env,填入網域、登入密碼與(建議)API 金鑰
+cp .env.example .env
+nano .env      # 至少填 DOMAIN 與 NUWA_PASSWORD;ANTHROPIC_API_KEY 建議也填
+
+# 3) 啟動(首次會建置映像;Caddy 會自動處理 HTTPS 憑證)
+docker compose up -d --build
+
+# 開 https://你的網域 —— 進站需輸入 NUWA_PASSWORD
+```
+
+只有 Caddy 對外開放 80/443,女媧工坊本身只在內部網路,外界一律經 HTTPS 進來。資料存於 `nuwa-data` volume,重建容器不遺失。更新版本:`git pull && docker compose up -d --build`。
+
+> 未設定 `NUWA_PASSWORD` 時 compose 會直接報錯拒絕啟動,避免不小心把無密碼的站開上公網。
+
 ### 安裝成 App(PWA)
 
 本站是 PWA:用手機或桌面 Chrome / Edge 開啟後,可從瀏覽器選單「安裝 / 加入主畫面」,像原生 App 一樣獨立視窗開啟,離線也能開啟外殼(需連線才能蒸餾 / 對話)。iOS Safari 用「分享 → 加入主畫面」。
