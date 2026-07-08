@@ -883,8 +883,118 @@ dialog::backdrop { background: rgba(10, 8, 6, 0.72); backdrop-filter: blur(3px);
 ::-webkit-scrollbar-thumb { background: var(--ink-3); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--line); }
 
+/* 手機頂欄與抽屜背幕:桌機隱藏 */
+.mobile-bar { display: none; }
+.nav-backdrop { display: none; }
+
+/* 平板 / 窄視窗:縮側欄、收直排軌 */
 @media (max-width: 900px) {
   body { grid-template-columns: 250px 1fr; }
   .vertical-rail { display: none; }
   .view { padding: 26px 22px 50px; }
+}
+
+/* ============ 手機(抽屜式側欄) ============ */
+@media (max-width: 720px) {
+  body { display: block; overflow: visible; }
+  .vertical-rail { display: none; }
+  .grain { opacity: 0.22; }
+
+  /* 固定頂欄 + 漢堡 */
+  .mobile-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 60;
+    height: calc(52px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 12px 0;
+    background: rgba(20, 16, 12, 0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  .hamburger {
+    font-size: 22px;
+    line-height: 1;
+    background: none;
+    border: none;
+    color: var(--paper);
+    width: 42px; height: 42px;
+    border-radius: 9px;
+    cursor: pointer;
+  }
+  .hamburger:active { background: var(--ink-2); }
+  .mobile-title { font-weight: 900; letter-spacing: 4px; font-size: 17px; }
+
+  /* 側欄 → 左側抽屜 */
+  .sidebar {
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    z-index: 80;
+    width: min(84vw, 320px);
+    height: 100dvh;
+    padding-top: calc(22px + env(safe-area-inset-top));
+    transform: translateX(-100%);
+    transition: transform 0.28s ease;
+    box-shadow: 0 0 44px rgba(0, 0, 0, 0.6);
+  }
+  body.nav-open .sidebar { transform: none; }
+  .nav-backdrop {
+    display: block;
+    position: fixed; inset: 0;
+    z-index: 70;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.28s ease;
+  }
+  body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
+
+  /* 主區讓開頂欄 */
+  .main {
+    margin-top: calc(52px + env(safe-area-inset-top));
+    height: calc(100dvh - 52px - env(safe-area-inset-top));
+  }
+  .view { padding: 20px 16px calc(36px + env(safe-area-inset-bottom)); }
+
+  /* 標題 / 空狀態縮放 */
+  .char-header { flex-direction: column; align-items: stretch; gap: 14px; margin-bottom: 22px; }
+  .char-header h2 { font-size: 25px; letter-spacing: 2px; }
+  .char-header-right { justify-content: space-between; }
+  .empty-hero { min-height: 70vh; gap: 22px; }
+  .empty-hero h2 { font-size: 21px; }
+  .empty-seal { width: 92px; height: 92px; font-size: 46px; }
+  .empty-steps { font-size: 12.5px; gap: 8px; }
+
+  /* 面板 / 操作列:滿寬換行 */
+  .panel { padding: 18px 15px; }
+  .panel-head { gap: 10px; }
+  .panel-actions { width: 100%; flex-wrap: wrap; }
+  .panel-actions .select { flex: 1 1 100%; }
+  .panel-actions .btn { flex: 1 1 auto; }
+  .dim-grid { grid-template-columns: 1fr 1fr; }
+
+  /* 對話視圖:占滿(扣頂欄),composer 貼底安全區 */
+  .view-chat { height: calc(100dvh - 52px - env(safe-area-inset-top)); }
+  .chat-header { padding: 12px 15px; gap: 10px; }
+  .chat-header-title h2 { font-size: 17px; letter-spacing: 1px; }
+  .conditions-banner { padding: 8px 15px; }
+  .messages { padding: 18px 15px 12px; gap: 16px; }
+  .msg { max-width: 90%; }
+  .composer { padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); gap: 8px; }
+
+  /* iOS:輸入框 ≥16px 才不會一聚焦就自動放大 */
+  .composer textarea,
+  .modal-form input,
+  .modal-form textarea,
+  #login-password { font-size: 16px; }
+
+  /* 對話框佔滿手機寬 */
+  dialog { width: 94vw; max-height: 88dvh; overflow-y: auto; }
+  dialog.modal-wide { width: 96vw; }
+  .modal-form { padding: 22px 18px; gap: 14px; }
+
+  /* 觸控目標略放大 */
+  .btn { padding: 11px 18px; }
 }

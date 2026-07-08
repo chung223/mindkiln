@@ -1222,6 +1222,20 @@ function bind() {
   for (const btn of document.querySelectorAll('[data-close]')) {
     btn.addEventListener('click', () => btn.closest('dialog').close());
   }
+
+  // 手機:漢堡開合側欄抽屜;點背景或點到人物/議事會/按鈕即收起
+  const closeNav = () => {
+    document.body.classList.remove('nav-open');
+    $('#btn-nav-toggle')?.setAttribute('aria-expanded', 'false');
+  };
+  $('#btn-nav-toggle')?.addEventListener('click', () => {
+    const open = document.body.classList.toggle('nav-open');
+    $('#btn-nav-toggle').setAttribute('aria-expanded', String(open));
+  });
+  $('#nav-backdrop')?.addEventListener('click', closeNav);
+  document.querySelector('.sidebar')?.addEventListener('click', (e) => {
+    if (e.target.closest('.char-card, .council-card, button')) closeNav();
+  });
 }
 
 // ---------- 啟動 ----------
