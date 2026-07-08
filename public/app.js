@@ -46,12 +46,51 @@ async function api(path, opts = {}) {
     ...opts,
     body: opts.body instanceof FormData ? opts.body : opts.body ? JSON.stringify(opts.body) : undefined,
   });
+  // 工作階段過期 / 未登入:跳出登入視窗(登入端點本身不觸發,以免遞迴)
+  if (res.status === 401 && !path.startsWith('/api/auth/')) showLoginGate();
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `請求失敗（${res.status}）`);
   }
   return res.json();
 }
+
+// ---------- 登入保護 ----------
+
+// 顯示登入視窗,回傳於登入成功時 resolve 的 Promise。
+function showLoginGate() {
+  const dlg = $('#modal-login');
+  const errEl = $('#login-error');
+  errEl.hidden = true;
+  if (!dlg.open) dlg.showModal();
+  return new Promise((resolve) => {
+    $('#form-login').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('/api/auth/login', { method: 'POST', body: { password: $('#login-password').value } });
+        $('#login-password').value = '';
+        dlg.close();
+        resolve();
+      } catch (err) {
+        errEl.textContent = err.message || '登入失敗';
+        errEl.hidden = false;
+      }
+    };
+  });
+}
+
+// 啟動時:若服務要求登入且尚未登入,先擋在登入視窗。
+async function ensureAuthenticated() {
+  let status;
+  try {
+    status = await fetch('/api/auth/status').then((r) => r.json());
+  } catch {
+    return; // 離線 / 連不上:交給後續流程處理
+  }
+  if (status.required && !status.authenticated) await showLoginGate();
+}
+
+let settingsAuthHasPassword = false; // 設定視窗開啟時記錄是否已有密碼(供啟用前的前端驗證)
 
 let toastTimer;
 function toast(msg, isError = false) {
@@ -916,6 +955,18 @@ function bind() {
     const syncVariant = () => { $('#variant-label').style.display = $('#setting-force-trad').checked ? '' : 'none'; };
     $('#setting-force-trad').onchange = syncVariant;
     syncVariant();
+    // 登入保護
+    settingsAuthHasPassword = cfg.authHasPassword;
+    const envManaged = cfg.authEnvManaged;
+    $('#setting-auth-enabled').checked = cfg.authRequired;
+    $('#setting-auth-enabled').disabled = envManaged;
+    $('#setting-auth-password').value = '';
+    $('#setting-auth-password').disabled = envManaged;
+    $('#setting-auth-password').placeholder = cfg.authHasPassword ? '(已設定,留空保留)' : '設定密碼';
+    $('#auth-hint').textContent = envManaged
+      ? '目前由環境變數 NUWA_PASSWORD 控制,無法在此關閉或更改。'
+      : '開啟後,所有人需輸入此密碼才能進入。雲端部署也可改用環境變數 NUWA_PASSWORD(優先且不落地)。';
+    $('#btn-logout').hidden = !cfg.authRequired;
     $('#modal-settings').showModal();
   });
   $('#form-settings').addEventListener('submit', async (e) => {
@@ -942,12 +993,32 @@ function bind() {
       }
       patch.zhVariant = $('#setting-zh-variant').value;
       patch.dimensionModel = $('#setting-dim-model').value.trim();
+      // 登入保護(環境變數控制時 UI 已停用,不送出)
+      if (!$('#setting-auth-enabled').disabled) {
+        const authEnabled = $('#setting-auth-enabled').checked;
+        const authPw = $('#setting-auth-password').value;
+        if (authEnabled && !authPw && !settingsAuthHasPassword) {
+          toast('請先設定登入密碼', true);
+          return;
+        }
+        patch.authEnabled = authEnabled;
+        if (authPw) patch.authPassword = authPw;
+      }
       await api('/api/config', { method: 'PUT', body: patch });
       $('#modal-settings').close();
       toast('設定已儲存');
+      // 若剛啟用保護而目前尚未登入,立即跳出登入
+      const st = await fetch('/api/auth/status').then((r) => r.json()).catch(() => null);
+      if (st && st.required && !st.authenticated) showLoginGate();
     } catch (err) {
       toast(err.message, true);
     }
+  });
+
+  // 登出:撤銷工作階段並重新載入(會回到登入畫面)
+  $('#btn-logout').addEventListener('click', async () => {
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* 忽略 */ }
+    location.reload();
   });
 
   // 儲存別名(對話對象稱呼)
@@ -1157,11 +1228,17 @@ function bind() {
 
 (async function init() {
   bind();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* 離線外殼非必要,失敗不影響使用 */ });
+  }
+  await ensureAuthenticated(); // 啟用登入保護時,先擋在登入視窗
   await refreshCharacters();
   await refreshCouncils();
   showView('view-empty');
-  const cfg = await api('/api/config');
-  if (!cfg.hasCredentials) {
-    toast('尚未設定模型憑證,請先到左下角「設定」填入', true);
-  }
+  try {
+    const cfg = await api('/api/config');
+    if (!cfg.hasCredentials) {
+      toast('尚未設定模型憑證,請先到左下角「設定」填入', true);
+    }
+  } catch { /* 剛被登出等情況:api 已處理 */ }
 })();

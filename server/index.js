@@ -21,10 +21,17 @@ import { detectSpeakersForCharacter, estimateDistillation } from './extract.js';
 import { DIMENSIONS } from './prompts.js';
 import { ZH_VARIANTS, DEFAULT_VARIANT } from './zhtw.js';
 import { createBackup } from './backup.js';
+import {
+  COOKIE_NAME, requireAuth, authRequired, isAuthenticated, checkPassword,
+  issueToken, revokeToken, hasPassword, authEnvManaged, parseCookies, hashPassword,
+  loginBlocked, noteLoginFailure, noteLoginSuccess,
+} from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 5723;
 const app = express();
+// 部署在反向代理 / 平台後方時,信任第一層代理以正確取得 https 與來源 IP(cookie Secure、登入節流)
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '5mb' }));
 
 // 同源防護：本機服務無驗證機制,阻擋其他網頁對本服務發出的跨站狀態變更請求。
@@ -45,6 +52,44 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// ---------- 登入(公開部署時的密碼保護) ----------
+// 這三個端點在 requireAuth 之前註冊,故本身不需登入即可存取。
+
+const isHttps = (req) => req.secure || req.get('x-forwarded-proto') === 'https';
+
+app.get('/api/auth/status', (req, res) => {
+  res.json({ required: authRequired(), authenticated: isAuthenticated(req) });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const ip = req.ip || 'unknown';
+  if (loginBlocked(ip)) {
+    res.status(429).json({ error: '嘗試次數過多,請稍後再試' });
+    return;
+  }
+  if (!authRequired()) { res.json({ ok: true }); return; } // 未啟用保護:直接放行
+  if (!checkPassword((req.body || {}).password)) {
+    noteLoginFailure(ip);
+    res.status(401).json({ error: '密碼錯誤' });
+    return;
+  }
+  noteLoginSuccess(ip);
+  res.cookie(COOKIE_NAME, issueToken(), {
+    httpOnly: true, sameSite: 'strict', path: '/',
+    maxAge: 1000 * 60 * 60 * 24 * 30, secure: isHttps(req),
+  });
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  revokeToken(parseCookies(req.headers.cookie)[COOKIE_NAME]);
+  res.clearCookie(COOKIE_NAME, { path: '/' });
+  res.json({ ok: true });
+});
+
+// 之後所有 /api 路由都需通過登入(未啟用保護時 requireAuth 直接放行)。
+app.use('/api', requireAuth);
 
 const wrap = (fn) => async (req, res) => {
   try {
@@ -86,6 +131,10 @@ app.get('/api/config', (req, res) => {
     forceTraditional: cfg.forceTraditional !== false, // 預設開啟
     zhVariant: cfg.zhVariant || DEFAULT_VARIANT,
     dimensionModel: cfg.dimensionModel || '', // 維度用的便宜模型(留空=與主模型相同)
+    // 登入保護狀態(不外洩密碼雜湊)
+    authRequired: authRequired(),
+    authEnvManaged: authEnvManaged(), // 由 NUWA_PASSWORD 環境變數控制,介面不可改
+    authHasPassword: hasPassword(),
   });
 });
 
@@ -93,7 +142,7 @@ app.put('/api/config', (req, res) => {
   const {
     apiKey, model, provider, openaiBaseURL, openaiModel, openaiApiKey,
     compatBaseURL, compatModel, compatApiKey, corpusBudget, forceTraditional,
-    zhVariant, dimensionModel,
+    zhVariant, dimensionModel, authEnabled, authPassword,
   } = req.body || {};
   const patch = {};
   if (provider !== undefined) patch.provider = ['openai', 'compat'].includes(provider) ? provider : 'anthropic';
@@ -109,6 +158,16 @@ app.put('/api/config', (req, res) => {
   if (forceTraditional !== undefined) patch.forceTraditional = Boolean(forceTraditional);
   if (zhVariant !== undefined) patch.zhVariant = ZH_VARIANTS.includes(zhVariant) ? zhVariant : DEFAULT_VARIANT;
   if (dimensionModel !== undefined) patch.dimensionModel = dimensionModel;
+  // 登入保護:啟用前必須已有(或同時設定)密碼,否則會把自己鎖在門外又無鑰匙
+  if (authEnabled !== undefined) {
+    const enable = Boolean(authEnabled);
+    if (enable && !authPassword && !hasPassword()) {
+      res.status(400).json({ error: '啟用登入保護前,請先設定密碼' });
+      return;
+    }
+    patch.authEnabled = enable;
+  }
+  if (authPassword) patch.authPasswordHash = hashPassword(String(authPassword));
   writeConfig(patch);
   res.json({ ok: true });
 });

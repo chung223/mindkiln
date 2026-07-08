@@ -2,13 +2,21 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>女媧工坊 · 蒸餾思維</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='14' fill='%23c8442a'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='%23f2e6cf' font-family='serif' font-weight='bold'>媧</text></svg>">
+<!-- PWA:可安裝、可離線開啟外殼 -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#c8442a">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="女媧工坊">
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div>
@@ -310,6 +318,19 @@
     </label>
     <p class="hint">蒸餾大陸講者時,「只轉字不改詞」能保留他真實的用語習慣(表達DNA),不被台灣化。</p>
 
+    <fieldset class="auth-fieldset">
+      <legend>登入保護</legend>
+      <label class="checkbox-row">
+        <input type="checkbox" id="setting-auth-enabled">
+        <span>需要密碼才能使用 —— <b>部署到公開網路前務必開啟</b>,否則任何人都能存取你的語料與對話。</span>
+      </label>
+      <label id="auth-pw-label">密碼
+        <input type="password" id="setting-auth-password" autocomplete="new-password" placeholder="設定密碼">
+      </label>
+      <p class="hint" id="auth-hint"></p>
+      <button type="button" class="btn btn-ghost btn-small" id="btn-logout" hidden>登出此裝置</button>
+    </fieldset>
+
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" id="btn-backup">備份資料</button>
       <button type="button" class="btn btn-ghost" data-close>取消</button>
@@ -389,6 +410,22 @@
     <h3 id="research-title">調研文件<button class="btn btn-ghost btn-small modal-x" data-close>✕</button></h3>
     <article class="md-body" id="research-body"></article>
   </div>
+</dialog>
+
+<!-- 登入(啟用密碼保護時) -->
+<dialog id="modal-login" class="modal-login">
+  <form class="modal-form" id="form-login">
+    <div class="login-seal" aria-hidden="true">媧</div>
+    <h3>女媧工坊</h3>
+    <p class="hint">此工坊已啟用登入保護,請輸入密碼進入。</p>
+    <label>密碼
+      <input type="password" id="login-password" autocomplete="current-password" required>
+    </label>
+    <p class="hint login-error" id="login-error" hidden></p>
+    <div class="modal-actions">
+      <button type="submit" class="btn btn-primary btn-block">進入</button>
+    </div>
+  </form>
 </dialog>
 
 <div class="toast" id="toast" popover="manual"></div>

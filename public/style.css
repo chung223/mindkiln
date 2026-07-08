@@ -653,6 +653,43 @@ dialog::backdrop { background: rgba(10, 8, 6, 0.72); backdrop-filter: blur(3px);
 .provider-fields { display: flex; flex-direction: column; gap: 16px; }
 .provider-fields[hidden] { display: none; }
 
+/* 登入保護設定區 */
+.auth-fieldset {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  margin: 2px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.auth-fieldset legend {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--gold);
+  padding: 0 8px;
+}
+.auth-fieldset .btn-small { align-self: flex-start; }
+
+/* 登入視窗 */
+.modal-login .modal-form { align-items: center; text-align: center; padding: 34px 32px 30px; }
+.modal-login .modal-form h3 { justify-content: center; letter-spacing: 6px; }
+.modal-login label { width: 100%; text-align: left; }
+.login-seal {
+  width: 62px;
+  height: 62px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--cinnabar);
+  color: var(--paper);
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 34px;
+  box-shadow: 0 6px 20px rgba(200, 68, 42, 0.4);
+}
+.login-error { color: var(--cinnabar-bright); margin-top: 0; }
+
 .checkbox-row {
   display: flex;
   gap: 10px;
